@@ -717,8 +717,20 @@ function entries(id, items, empty, { allowDelete = false, newestFirst = false } 
       link.rel = 'noopener noreferrer';
       title.replaceChildren(link);
     }
-    description.append(title,
-      nodes('span', [item.course, (item.allDay ? fullDate : shortDate).format(item.date)].filter(Boolean).join(' · '), 'meta'));
+    description.append(title);
+    const dateLabel = (item.allDay ? fullDate : shortDate).format(item.date);
+    if (item.assignmentId) {
+      description.append(
+        nodes('span', item.course || 'Asignatura sin indicar', 'meta'),
+        nodes('span', 'Apertura: ' + (item.opens || 'no indicada'), 'meta'),
+        nodes('span', 'Fecha límite: ' + (item.due || dateLabel), 'meta')
+      );
+      if (item.closes !== item.due || !item.closes) {
+        description.append(nodes('span', 'Cierre: ' + (item.closes || 'no indicado por Moodle'), 'meta'));
+      }
+    } else {
+      description.append(nodes('span', [item.course, dateLabel].filter(Boolean).join(' · '), 'meta'));
+    }
     row.append(description);
     if (allowDelete && item.id) {
       const remove = nodes('button', 'Eliminar');
@@ -897,8 +909,13 @@ function applyMoodleSnapshot(data, { cached = false } = {}) {
         ? String(item.assignmentId) : '';
       const assignmentId = /^\d{1,18}$/.test(rawId) ? rawId : null;
       const state = assignmentId ? data.assignments?.[assignmentId] : null;
+      const details = assignmentId ? data.taskDetails?.[assignmentId] : null;
       events.push({
         date, title: item.title, allDay: true, kind: 'moodle', assignmentId,
+        course: typeof details?.course === 'string' ? details.course : '',
+        opens: typeof details?.opens === 'string' ? details.opens : '',
+        due: typeof details?.due === 'string' ? details.due : '',
+        closes: typeof details?.closes === 'string' ? details.closes : '',
         state: ['submitted', 'draft', 'pending'].includes(state) ? state : 'unknown'
       });
     }
@@ -952,10 +969,12 @@ function savePrivateCalendar(data) {
   for (const month of data.months) months.set(month.month, month);
   const ordered = [...months.values()].sort((first, second) => first.month.localeCompare(second.month));
   const assignments = { ...privateCalendar?.assignments, ...data.assignments };
+  const taskDetails = { ...privateCalendar?.taskDetails, ...data.taskDetails };
   const ids = new Set(ordered.flatMap(month => month.events.map(item => item?.assignmentId).filter(Boolean)));
   const snapshot = {
     months: ordered,
     assignments: Object.fromEntries(Object.entries(assignments).filter(([id]) => ids.has(id))),
+    taskDetails: Object.fromEntries(Object.entries(taskDetails).filter(([id]) => ids.has(id))),
     refresh: data.refresh
   };
   if (!applyMoodleSnapshot(snapshot)) return false;

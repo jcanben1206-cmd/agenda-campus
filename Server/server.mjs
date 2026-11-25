@@ -19,7 +19,7 @@ const loginWindow = 15 * 60 * 1000;
 let activeLogins = 0;
 
 function calendarSession(moodle) {
-  return { moodle, cache: { months: [], assignments: {} }, lastCheck: 0, running: undefined };
+  return { moodle, cache: { months: [], assignments: {}, taskDetails: {} }, lastCheck: 0, running: undefined };
 }
 
 function payload(session) {
@@ -30,7 +30,7 @@ function sync(session, automatic) {
   if (session.running) return session.running;
   const freshness = automatic ? 10 * 60 * 1000 : 15000;
   if (session.lastCheck && Date.now() - session.lastCheck < freshness) return Promise.resolve(payload(session));
-  session.running = session.moodle.snapshot(session.cache.assignments).then(next => {
+  session.running = session.moodle.snapshot(session.cache.assignments, session.cache.taskDetails).then(next => {
     const previous = new Map(session.cache.months.map(month => [month.month, month]));
     const checkedAt = Date.now();
     const months = next.months.map(month => {
@@ -38,7 +38,7 @@ function sync(session, automatic) {
       return JSON.stringify(existing?.events) === JSON.stringify(month.events)
         ? existing : { ...month, updatedAt: checkedAt };
     });
-    session.cache = { months, assignments: next.assignments };
+    session.cache = { months, assignments: next.assignments, taskDetails: next.taskDetails };
     session.lastCheck = checkedAt;
     return payload(session);
   }).finally(() => { session.running = undefined; });

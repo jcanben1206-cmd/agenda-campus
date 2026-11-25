@@ -16,6 +16,7 @@ export class MoodleSession {
   #jar = new CookieJar();
   #retryLoginAfter = 0;
   #cursor = 0;
+  #courseNames = new Map();
 
   constructor(username, password, fetchPage = fetch) {
     this.username = username;
@@ -91,7 +92,7 @@ export class MoodleSession {
     }
   }
 
-  async snapshot(previousAssignments = {}) {
+  async snapshot(previousAssignments = {}, previousDetails = {}) {
     const now = new Date();
     const months = [];
     for (const offset of [0, 1]) {
@@ -113,6 +114,7 @@ export class MoodleSession {
 
     const ids = [...new Set(months.flatMap(month => month.events.map(event => event.assignmentId).filter(Boolean)))];
     const assignments = Object.fromEntries(ids.filter(id => previousAssignments[id]).map(id => [id, previousAssignments[id]]));
+    const taskDetails = Object.fromEntries(ids.filter(id => previousDetails[id]).map(id => [id, previousDetails[id]]));
     const start = this.#cursor % (ids.length || 1);
     const limit = Math.min(18, ids.length);
     for (let index = 0; index < limit; index += 3) {
@@ -123,11 +125,30 @@ export class MoodleSession {
           if (page.url.pathname !== assignmentPath) return;
           const state = readSubmission(page.$);
           if (state) assignments[id] = state;
+          const details = readTaskDetails(page.$);
+          if (!details.course && details.courseId) await this.#lookupCourse(details);
+          if (details.course || details.opens || details.due || details.closes) {
+            delete details.courseId;
+            taskDetails[id] = details;
+          }
         } catch {}
       }));
     }
     this.#cursor = (start + limit) % (ids.length || 1);
-    return { months, assignments };
+    return { months, assignments, taskDetails };
+  }
+
+  async #lookupCourse(details) {
+    const { courseId } = details;
+    if (!this.#courseNames.has(courseId)) {
+      this.#courseNames.set(courseId, this.page(moodle + base + '/course/view.php?id=' + courseId).then(page => {
+        if (page.url.pathname !== base + '/course/view.php') return '';
+        return page.$('#page-header h1, main h1').first().text().trim().slice(0, 250);
+      }).catch(() => ''));
+    }
+    const course = await this.#courseNames.get(courseId);
+    if (course) details.course = course;
+    else this.#courseNames.delete(courseId);
   }
 }
 
@@ -179,4 +200,42 @@ function readSubmission($) {
   if (/^todav[ií]a no se han realizado env[ií]os$/.test(value)) return 'pending';
   if (/^(sin (entregar|entrega|env[ií]o)|no entregad[oa]|no enviad[oa]|a[uú]n no (hay|ha habido) (entrega|env[ií]o)s?|no (hay|ha habido) (ning[uú]n[ao] )?(entrega|env[ií]o)s?|no se ha (enviado|entregado|realizado) (nada|ninguna entrega|ning[uú]n env[ií]o|esta tarea)( (para|en) esta tarea)?|nothing (has been )?submitted for this assignment|no submission(?: yet)?)$/.test(value)) return 'pending';
   return null;
+}
+
+function readTaskDetails($) {
+  const details = {};
+  const text = value => value.replace(/\s+/g, ' ').trim().slice(0, 250);
+  const normalize = value => text(value).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/:$/, '');
+  const courseLink = $('.breadcrumb a[href*="/course/view.php"], [aria-label="Breadcrumb"] a[href*="/course/view.php"]').last();
+  const course = text(courseLink.text());
+  if (course && !/^(curso|course)$/i.test(course)) details.course = course;
+  const courseHref = courseLink.attr('href') || $('#page-header a[href*="/course/view.php"], .secondary-navigation a[href*="/course/view.php"]').first().attr('href');
+  const courseId = /(?:^|\s)course-(\d{1,12})(?:\s|$)/.exec($('body').attr('class') || '')?.[1] ||
+    /[?&]id=(\d{1,12})(?:&|$)/.exec(courseHref || '')?.[1];
+  if (courseId && courseId !== '1') details.courseId = courseId;
+
+  let extendedDue;
+  function addDate(label, value) {
+    const name = normalize(label);
+    const date = text(value);
+    if (!date || date === '-') return;
+    if (/^(abrio|abrira|abre|abiert[oa]|se (abrio|abre|abrira)|apertura|fecha de apertura|permitir entregas desde|entregas abiertas|opens?|opened|submissions open(?:ed)?|allow submissions from)( el)?$/.test(name)) details.opens = date;
+    if (/^(cierre|fecha de (cierre|corte)|cierra|cerro|cerrado|se cierra|se cerro|closes?|closed|cut.?off date)$/.test(name)) details.closes = date;
+    if (/^(fecha limite(?: de entrega)?|fecha de (entrega|vencimiento)|vencimiento|vence|plazo de entrega|due(?: date)?|submission due)$/.test(name)) details.due = date;
+    if (/^(fecha de (extension|prorroga)|extension due date|extended due date)$/.test(name)) extendedDue = date;
+  }
+
+  $('[data-region="activity-dates"] .date-item, .activity-dates .date-item').each((_, node) => {
+    const item = $(node).clone();
+    const label = item.find('.date-item-label').first();
+    const name = label.text();
+    label.remove();
+    addDate(name, item.text());
+  });
+  $('.submissionstatustable tr').each((_, node) => {
+    const cells = $(node).children();
+    if (cells.length === 2) addDate(cells.first().text(), cells.last().text());
+  });
+  if (extendedDue) details.due = extendedDue;
+  return details;
 }
