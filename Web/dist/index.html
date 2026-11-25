@@ -57,6 +57,10 @@ try {
   ul { list-style: none; padding: 0; margin: .6rem 0 0; }
   li { display: flex; justify-content: space-between; align-items: center; gap: .6rem; padding: .85rem 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
   .meta { display: block; color: var(--muted); font-size: .9rem; margin-top: .25rem; }
+  .calendar-pills { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem; }
+  .calendar-pill { max-width: 100%; padding: .2rem .45rem; border-radius: .6rem; background: var(--control); color: var(--control-text); font-size: .8125rem; overflow-wrap: anywhere; }
+  .calendar-agenda li > div, #moodle-groups li > div { flex: 1 1 10rem; min-width: 0; }
+  #moodle-groups li { flex-wrap: wrap; }
   .status { flex: 0 0 auto; font-size: .875rem; font-weight: 650; border-radius: .5rem; padding: .28rem .45rem; background: var(--status-bg); color: var(--status-text); }
   .done { background: var(--done-bg); color: var(--done-text); }
   .pending-task { background: var(--pending-bg); color: var(--pending-text); }
@@ -250,18 +254,6 @@ try {
           <ul id="moodle-late"></ul>
         </details>
       </div>
-      <details class="date-group">
-        <summary>Sincronización con Moodle</summary>
-        <div class="moodle-settings">
-          <p class="summary" id="moodle-sync" role="status">Abre el calendario mensual de Moodle en Chrome para consultar tus eventos.</p>
-          <p><a href="https://educacionadistancia.juntadeandalucia.es/centros/sevilla/calendar/view.php?view=month" target="_blank" rel="noopener noreferrer">Abrir el calendario de Moodle Sevilla</a></p>
-          <p class="summary">En Moodle, abre Calendario → Exportar calendario → Exportar. Selecciona aquí el archivo .ics que descargues.</p>
-          <label for="moodle-file">Importar archivo de calendario (.ics)</label>
-          <input type="file" id="moodle-file" accept=".ics,text/calendar" aria-describedby="moodle-status">
-          <p id="moodle-status" role="status"></p>
-          <button type="button" id="clear-moodle" hidden>Quitar calendario importado</button>
-        </div>
-      </details>
     </div>
   </section>
   <section class="panel" id="exams" hidden>
@@ -302,6 +294,17 @@ try {
       <button type="button" id="closed-notices" hidden>Activar avisos con la agenda cerrada</button>
       <p class="summary" id="closed-notices-status" role="status" hidden></p>
       <p class="summary" id="account-status" role="status">Entra con tu cuenta de Moodle para ver tus tareas y tu calendario.</p>
+      <details class="date-group">
+        <summary>Sincronización e importación de Moodle</summary>
+        <div class="moodle-settings">
+          <p class="summary" id="moodle-sync" role="status">Abre el calendario mensual de Moodle en Chrome para consultar tus eventos.</p>
+          <p class="summary">En Moodle, abre Calendario → Exportar calendario → Exportar. Selecciona aquí el archivo .ics que descargues.</p>
+          <label for="moodle-file">Importar archivo de calendario (.ics)</label>
+          <input type="file" id="moodle-file" accept=".ics,text/calendar" aria-describedby="moodle-status">
+          <p id="moodle-status" role="status"></p>
+          <button type="button" id="clear-moodle" hidden>Quitar calendario importado</button>
+        </div>
+      </details>
       <details class="date-group" id="private-owner-settings">
         <summary>Conectar servidor privado</summary>
         <form id="private-server-form">
@@ -732,6 +735,20 @@ function taskBadge(item) {
   return isPast(item) ? { label: 'Vencida · ' + label, tone: 'late-task' } : { label, tone: 'pending-task' };
 }
 
+function calendarPills(item, dateLabel, selectedDay) {
+  const pills = [
+    item.course,
+    item.opens && 'Apertura: ' + item.opens,
+    item.due && 'Fecha límite: ' + item.due,
+    item.closes && item.closes !== item.due && 'Cierre: ' + item.closes
+  ];
+  if (!item.due && !selectedDay) pills.push(dateLabel);
+  if (selectedDay && !item.allDay) {
+    pills.push(item.date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }));
+  }
+  return pills.filter(Boolean);
+}
+
 function entries(id, items, empty, { allowDelete = false, newestFirst = false } = {}) {
   const list = get(id);
   list.replaceChildren();
@@ -749,7 +766,14 @@ function entries(id, items, empty, { allowDelete = false, newestFirst = false } 
     }
     description.append(title);
     const dateLabel = (item.allDay ? fullDate : shortDate).format(item.date);
-    if (item.assignmentId) {
+    if (['day-list', 'moodle-upcoming', 'moodle-late'].includes(id)) {
+      const details = calendarPills(item, dateLabel, id === 'day-list');
+      if (details.length) {
+        const pills = nodes('div', '', 'calendar-pills');
+        pills.append(...details.map(detail => nodes('span', detail, 'calendar-pill')));
+        description.append(pills);
+      }
+    } else if (item.assignmentId) {
       description.append(
         nodes('span', item.course || 'Asignatura sin indicar', 'meta'),
         nodes('span', 'Apertura: ' + (item.opens || 'no indicada'), 'meta'),
