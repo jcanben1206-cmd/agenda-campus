@@ -233,9 +233,11 @@ try {
 const get = id => document.getElementById(id);
 const privateServerSetting = 'agenda-campus-private-server';
 const privateServerSecret = 'agenda-campus-private-access-key';
+const privateCalendarPrefix = 'agenda-campus-private-calendar-v1:';
 let privateServer;
 let privatePassword;
 let privateRequest;
+let privateCalendar;
 
 function privateServerOrigin(value) {
   try {
@@ -662,7 +664,7 @@ window.addEventListener('message', event => {
   applyMoodleSnapshot(event.data);
 });
 
-function applyMoodleSnapshot(data) {
+function applyMoodleSnapshot(data, { cached = false } = {}) {
   if (!Array.isArray(data?.months)) return false;
   const months = new Map();
   for (const snapshot of data.months) {
@@ -685,6 +687,7 @@ function applyMoodleSnapshot(data) {
     }
     months.set(snapshot.month, { updatedAt: snapshot.updatedAt, events });
   }
+  if (privateServer && (months.size === 0 || months.size !== data.months.length)) return false;
   syncedMonths = months;
   get('account-credentials').hidden = Boolean(privateServer);
   get('sync-now').hidden = false;
@@ -700,10 +703,11 @@ function applyMoodleSnapshot(data) {
   if (refresh === 'error') status = 'La última actualización falló. Pulsa Actualizar ahora para volver a intentarlo.';
   if (refresh === 'unavailable') status = 'La última conexión no terminó. Abre Moodle para comprobar si tienes que volver a iniciar sesión.';
   if (refresh === 'ok') status = 'Comprobados este mes y el siguiente.';
+  if (cached) status = 'Mostrando los datos guardados en este navegador.';
   get('moodle-sync').textContent = latestLabel + status;
   get('account-status').textContent = latestLabel + status;
   render();
-  if (refresh === 'ok') summarizeMoodleChanges(months, checkedAt);
+  if (refresh === 'ok' && !cached) summarizeMoodleChanges(months, checkedAt);
   if (!privateServer && aiEnabled && !checkedOnOpen) {
     checkedOnOpen = true;
     get('sync-now').click();
@@ -711,9 +715,42 @@ function applyMoodleSnapshot(data) {
   return true;
 }
 
+function restorePrivateCalendar() {
+  privateCalendar = null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(privateCalendarPrefix + privateServer) || 'null');
+    if (saved?.refresh?.status === 'ok' && applyMoodleSnapshot(saved, { cached: true })) {
+      privateCalendar = saved;
+    }
+  } catch {}
+}
+
+function savePrivateCalendar(data) {
+  if (data?.refresh?.status !== 'ok' || !Array.isArray(data.months) || !data.months.length ||
+      !data.months.every(month => month && /^\d{4}-(0[1-9]|1[0-2])$/.test(month.month) &&
+        Number.isFinite(month.updatedAt) && Array.isArray(month.events))) return false;
+  const months = new Map((privateCalendar?.months || []).map(month => [month.month, month]));
+  for (const month of data.months) months.set(month.month, month);
+  const ordered = [...months.values()].sort((first, second) => first.month.localeCompare(second.month));
+  const assignments = { ...privateCalendar?.assignments, ...data.assignments };
+  const ids = new Set(ordered.flatMap(month => month.events.map(item => item?.assignmentId).filter(Boolean)));
+  const snapshot = {
+    months: ordered,
+    assignments: Object.fromEntries(Object.entries(assignments).filter(([id]) => ids.has(id))),
+    refresh: data.refresh
+  };
+  if (!applyMoodleSnapshot(snapshot)) return false;
+  if (JSON.stringify(privateCalendar) !== JSON.stringify(snapshot)) {
+    try { localStorage.setItem(privateCalendarPrefix + privateServer, JSON.stringify(snapshot)); } catch {}
+  }
+  privateCalendar = snapshot;
+  return true;
+}
+
 async function queryPrivateServer(refresh) {
   if (!privatePassword) {
-    get('account-status').textContent = 'Introduce la clave del servidor en Conectar servidor privado.';
+    get('account-status').textContent = (privateCalendar ? 'Se muestran los datos guardados. ' : '') +
+      'Introduce la clave del servidor para actualizar Moodle.';
     return;
   }
   privateRequest?.abort();
@@ -734,12 +771,18 @@ async function queryPrivateServer(refresh) {
       throw new Error(response.status === 401 ? 'La clave del servidor no es correcta.' :
         response.status === 502 ? 'El servidor no pudo consultar Moodle.' : 'El servidor no completó la comprobación.');
     }
-    if (!applyMoodleSnapshot(data)) throw new Error('El servidor devolvió un calendario incompatible.');
+    if (!refresh && Array.isArray(data?.months) && !data.months.length && !data.refresh) {
+      get('account-status').textContent = (privateCalendar ? 'Se muestran los datos guardados. ' : '') +
+        'Pulsa Actualizar ahora para consultar Moodle.';
+      return;
+    }
+    if (!savePrivateCalendar(data)) throw new Error('El servidor devolvió un calendario incompatible.');
   } catch (error) {
     if (!request.signal.aborted) {
       const status = error.name === 'Error' ? error.message : 'No se pudo conectar con el servidor privado.';
-      get('account-status').textContent = status;
-      get('moodle-sync').textContent = status;
+      const notice = status + (privateCalendar ? ' Se mantienen los datos guardados.' : '');
+      get('account-status').textContent = notice;
+      get('moodle-sync').textContent = notice;
     }
   }
 }
@@ -765,14 +808,17 @@ get('private-server-form').addEventListener('submit', event => {
     localStorage.setItem(privateServerSetting, privateServer);
     sessionStorage.setItem(privateServerSecret, privatePassword);
   } catch {}
+  restorePrivateCalendar();
   render();
   queryPrivateServer(true);
 });
 
 get('disconnect-private-server').addEventListener('click', () => {
   privateRequest?.abort();
+  try { localStorage.removeItem(privateCalendarPrefix + privateServer); } catch {}
   privateServer = null;
   privatePassword = null;
+  privateCalendar = null;
   syncedMonths = new Map();
   try { localStorage.removeItem(privateServerSetting); sessionStorage.removeItem(privateServerSecret); } catch {}
   get('private-server-form').reset();
@@ -801,7 +847,9 @@ if (location.origin === 'http://127.0.0.1:8765' ||
     get('private-server-url').value = privateServer;
     get('disconnect-private-server').hidden = false;
     get('sync-now').hidden = false;
-    queryPrivateServer(aiEnabled);
+    restorePrivateCalendar();
+    if (aiEnabled || !privateCalendar) queryPrivateServer(true);
+    else if (!privatePassword) queryPrivateServer(false);
   } else {
     window.postMessage({ type: 'agenda-campus:request-moodle-snapshots' }, location.origin);
   }
