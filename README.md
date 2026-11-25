@@ -10,6 +10,10 @@ El sitio de GitHub Pages es visible públicamente en la configuración habitual.
 
 ### Sincronizar desde un servidor privado
 
+Los estudiantes de Moodle Sevilla pueden usar **Entrar con Moodle** en la web con su propio usuario y contraseña. Cada sesión usa su propio calendario, sus propios estados de entrega y su propio espacio local de exámenes. El servidor descarta la contraseña tras iniciar sesión y mantiene la sesión en memoria. Si Moodle cierra la sesión, pasan 12 horas o Render reinicia el servicio, vuelve a entrar. En un ordenador compartido, usa **Cerrar sesión de Moodle** al terminar.
+
+El acceso con clave de Render sigue disponible para la configuración inicial del propietario.
+
 1. En Render, crea un **Blueprint** desde este repositorio. El archivo `render.yaml` crea un servicio web con una API protegida por una clave de acceso.
 2. En el formulario de Render, introduce `MOODLE_USERNAME` y `MOODLE_PASSWORD` como variables de entorno. Render genera `AGENDA_ACCESS_KEY`. Las tres variables se configuran en Render y sus valores quedan fuera del repositorio.
 3. Abre Agenda Campus y ve a **Ajustes → Cuenta de Moodle Sevilla → Conectar servidor privado**. Pega la dirección del servicio de Render y el valor de `AGENDA_ACCESS_KEY`. Pulsa **Conectar y actualizar**.

@@ -23,6 +23,11 @@ export class MoodleSession {
     this.fetchPage = fetchPage;
   }
 
+  forgetCredentials() {
+    this.username = undefined;
+    this.password = undefined;
+  }
+
   async page(address, form = null) {
     let url = new URL(address);
     for (let hops = 0; hops < 12; hops++) {
@@ -50,6 +55,7 @@ export class MoodleSession {
   }
 
   async signIn() {
+    if (!this.username || !this.password) throw new MoodleLoginRequired();
     if (Date.now() < this.#retryLoginAfter) throw new Error('Inicio de sesión pendiente de comprobar.');
     this.#retryLoginAfter = Date.now() + 15 * 60 * 1000;
     const { url, $ } = await this.page(moodle + loginPath + '?authCAS=CAS');
@@ -114,6 +120,8 @@ export class MoodleSession {
     return { months, assignments };
   }
 }
+
+export class MoodleLoginRequired extends Error {}
 
 function readCalendar($, month, pageUrl) {
   const table = $('#region-main table[id^="month-detailed-"]').first();

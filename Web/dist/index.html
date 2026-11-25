@@ -128,6 +128,7 @@ try {
       <h2>Entregas</h2>
       <label><input type="checkbox" id="pending"> Solo pendientes</label>
       <button type="button" id="sync-tasks" hidden>Actualizar tareas</button>
+      <button type="button" id="open-moodle-login">Entrar con Moodle</button>
     </div>
     <p class="summary" id="task-source">Abre Calendario para sincronizar tus tareas de Moodle.</p>
     <p class="summary" id="task-sync-status" role="status" hidden></p>
@@ -210,13 +211,20 @@ try {
     <section class="account-settings" aria-labelledby="account-title">
       <h2 id="account-title">Cuenta de Moodle Sevilla</h2>
       <p class="summary">Con la agenda abierta, el servidor revisa Moodle aproximadamente cada 10 minutos.</p>
+      <form id="moodle-login">
+        <label>Usuario de Moodle <input id="moodle-username" autocomplete="username" maxlength="254" required></label>
+        <label>Contraseña de Moodle <input id="moodle-password" type="password" autocomplete="current-password" maxlength="512" required></label>
+        <button type="submit" class="primary">Entrar con Moodle</button>
+      </form>
+      <button type="button" id="moodle-logout" hidden>Cerrar sesión de Moodle</button>
+      <p class="summary" id="moodle-login-status" role="status" hidden></p>
       <a class="account-link" href="https://educacionadistancia.juntadeandalucia.es/centros/sevilla/calendar/view.php?view=month" target="_blank" rel="noopener noreferrer">Conectar con Moodle Sevilla</a>
       <button type="button" id="account-credentials" hidden>Configurar acceso automático</button>
       <button type="button" id="sync-now" hidden>Actualizar ahora</button>
       <button type="button" id="enable-notifications" hidden>Activar avisos de escritorio</button>
       <p class="summary" id="notifications-status" role="status" hidden></p>
-      <p class="summary" id="account-status" role="status">Carga la extensión de Agenda Campus en Chrome para sincronizar tu cuenta.</p>
-      <details class="date-group">
+      <p class="summary" id="account-status" role="status">Entra con tu cuenta de Moodle para ver tus tareas y tu calendario.</p>
+      <details class="date-group" id="private-owner-settings">
         <summary>Conectar servidor privado</summary>
         <form id="private-server-form">
           <label>Dirección del servidor <input type="url" id="private-server-url" placeholder="https://agenda-campus-moodle.onrender.com" required></label>
@@ -242,6 +250,11 @@ const get = id => document.getElementById(id);
 const privateServerSetting = 'agenda-campus-private-server';
 const privateServerSecret = 'agenda-campus-private-access-key';
 const privateCalendarPrefix = 'agenda-campus-private-calendar-v1:';
+const publicMoodleServer = 'https://agenda-campus-moodle.onrender.com';
+const accountModeKey = 'agenda-campus-account-mode';
+const accountSessionKey = 'agenda-campus-account-session';
+let accountMode;
+let activeAccount;
 let privateServer;
 let privatePassword;
 let privateRequest;
@@ -279,9 +292,29 @@ function privateServerOrigin(value) {
 }
 
 try {
-  privateServer = privateServerOrigin(localStorage.getItem(privateServerSetting));
-  privatePassword = sessionStorage.getItem(privateServerSecret);
+  accountMode = sessionStorage.getItem(accountModeKey) || localStorage.getItem(accountModeKey);
+  const saved = JSON.parse(sessionStorage.getItem(accountSessionKey) || 'null');
+  if (validAccount(saved)) {
+    accountMode = 'moodle';
+    activeAccount = saved;
+    privateServer = publicMoodleServer;
+    privatePassword = saved.token;
+  } else if (accountMode !== 'moodle') {
+    privateServer = privateServerOrigin(localStorage.getItem(privateServerSetting));
+    privatePassword = sessionStorage.getItem(privateServerSecret);
+  }
 } catch {}
+
+function validAccount(entry) {
+  return Boolean(entry && typeof entry.accountId === 'string' && /^[a-f0-9]{64}$/.test(entry.accountId) &&
+    typeof entry.token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(entry.token) &&
+    Number.isFinite(entry.expires) && entry.expires > Date.now());
+}
+
+function personalKey(base) {
+  if (activeAccount) return base + ':' + activeAccount.accountId;
+  return accountMode === 'moodle' ? base + ':guest' : base;
+}
 
 const aiPreference = 'agenda-campus-local-ai';
 const aiBaseline = 'agenda-campus-ai-baseline';
@@ -303,7 +336,7 @@ get('local-ai-toggle').addEventListener('click', async () => {
   if (aiEnabled) {
     aiEnabled = false;
     aiRun++;
-    try { localStorage.removeItem(aiPreference); localStorage.removeItem(aiBaseline); } catch {}
+    try { localStorage.removeItem(aiPreference); localStorage.removeItem(personalKey(aiBaseline)); } catch {}
     updateAiControl();
     status.textContent = 'IA local desactivada.';
     return;
@@ -351,8 +384,8 @@ async function summarizeMoodleChanges(months, checkedAt) {
   const status = get('local-ai-status');
   let previous;
   try {
-    previous = JSON.parse(localStorage.getItem(aiBaseline) || 'null');
-    localStorage.setItem(aiBaseline, JSON.stringify(events));
+    previous = JSON.parse(localStorage.getItem(personalKey(aiBaseline)) || 'null');
+    localStorage.setItem(personalKey(aiBaseline), JSON.stringify(events));
   } catch {
     status.textContent = 'No se pudo guardar la referencia de novedades.';
     return;
@@ -420,25 +453,33 @@ function message(content) {
   get('storage-message').textContent = content;
   get('storage-message').hidden = !content;
 }
-try {
-  const saved = JSON.parse(localStorage.getItem(key) || '[]');
-  exams = saved.map(item => ({ ...item, date: new Date(item.date) }))
-    .filter(item => item.kind === 'exam' && typeof item.title === 'string' && Number.isFinite(+item.date));
-} catch {
-  message('No se pudieron cargar los exámenes guardados.');
-}
-
-try {
-  const saved = JSON.parse(localStorage.getItem(moodleKey) || 'null');
-  if (Array.isArray(saved)) {
-    moodleEvents = saved.map(item => ({ ...item, date: new Date(item.date) }))
-      .filter(item => item.kind === 'moodle' && typeof item.title === 'string' && Number.isFinite(+item.date));
-    moodleLoaded = true;
-    moodleStatus();
+function loadPersonalData() {
+  exams = [];
+  moodleEvents = [];
+  moodleLoaded = false;
+  message('');
+  try {
+    const saved = JSON.parse(localStorage.getItem(personalKey(key)) || '[]');
+    if (Array.isArray(saved)) {
+      exams = saved.map(item => ({ ...item, date: new Date(item.date) }))
+        .filter(item => item.kind === 'exam' && typeof item.title === 'string' && Number.isFinite(+item.date));
+    }
+  } catch {
+    message('No se pudieron cargar los exámenes guardados.');
   }
-} catch {
-  get('moodle-status').textContent = 'No se pudo recuperar el calendario guardado.';
+  try {
+    const saved = JSON.parse(localStorage.getItem(personalKey(moodleKey)) || 'null');
+    if (Array.isArray(saved)) {
+      moodleEvents = saved.map(item => ({ ...item, date: new Date(item.date) }))
+        .filter(item => item.kind === 'moodle' && typeof item.title === 'string' && Number.isFinite(+item.date));
+      moodleLoaded = true;
+    }
+    moodleStatus();
+  } catch {
+    get('moodle-status').textContent = 'No se pudo recuperar el calendario guardado.';
+  }
 }
+loadPersonalData();
 
 function moodleStatus(skipped = 0) {
   const count = moodleEvents.length;
@@ -509,7 +550,7 @@ function calendarDate(value, timezone) {
 
 function save(entries) {
   try {
-    localStorage.setItem(key, JSON.stringify(entries));
+    localStorage.setItem(personalKey(key), JSON.stringify(entries));
   } catch {
     message('Safari no pudo guardar el cambio en este navegador.');
     return false;
@@ -683,7 +724,7 @@ get('pending').addEventListener('change', render);
 
 window.addEventListener('message', event => {
   if (event.source !== window || event.origin !== location.origin) return;
-  if (privateServer) return;
+  if (privateServer || accountMode === 'moodle') return;
   if (event.data?.type === 'agenda-campus:sync-error') {
     get('account-status').textContent = 'No se pudo iniciar la comprobación.';
     if (!get('task-sync-status').hidden) get('task-sync-status').textContent = get('account-status').textContent;
@@ -750,7 +791,7 @@ function applyMoodleSnapshot(data, { cached = false } = {}) {
 function restorePrivateCalendar() {
   privateCalendar = null;
   try {
-    const saved = JSON.parse(localStorage.getItem(privateCalendarPrefix + privateServer) || 'null');
+    const saved = JSON.parse(localStorage.getItem(personalKey(privateCalendarPrefix + privateServer)) || 'null');
     if (saved?.refresh?.status === 'ok' && applyMoodleSnapshot(saved, { cached: true })) {
       privateCalendar = saved;
     }
@@ -786,7 +827,7 @@ function savePrivateCalendar(data) {
     }
   }
   if (JSON.stringify(privateCalendar) !== JSON.stringify(snapshot)) {
-    try { localStorage.setItem(privateCalendarPrefix + privateServer, JSON.stringify(snapshot)); } catch {}
+    try { localStorage.setItem(personalKey(privateCalendarPrefix + privateServer), JSON.stringify(snapshot)); } catch {}
   }
   privateCalendar = snapshot;
   return true;
@@ -795,6 +836,10 @@ function savePrivateCalendar(data) {
 function checkPrivateCalendar() {
   clearTimeout(privateCheckTimer);
   if (!privateServer || privateRequest) return;
+  if (activeAccount && activeAccount.expires <= Date.now()) {
+    endMoodleSession('Tu sesión ha caducado. Vuelve a entrar con Moodle.');
+    return;
+  }
   const lastActivity = Math.max(Number(privateCalendar?.refresh?.checkedAt) || 0, lastAutoAttempt);
   const delay = lastActivity + privateFreshness - Date.now();
   if (privatePassword && delay > 0) {
@@ -828,6 +873,10 @@ async function queryPrivateServer(automatic = false) {
     if (request.signal.aborted) return;
     if (!response.ok) {
       if (response.status === 401) {
+        if (activeAccount) {
+          endMoodleSession('Tu sesión ha caducado. Vuelve a entrar con Moodle.');
+          return;
+        }
         privatePassword = null;
         try { sessionStorage.removeItem(privateServerSecret); } catch {}
       }
@@ -851,6 +900,119 @@ async function queryPrivateServer(automatic = false) {
   }
 }
 
+function loginMessage(text) {
+  const status = get('moodle-login-status');
+  status.textContent = text;
+  status.hidden = !text;
+}
+
+function showMoodleSession() {
+  get('moodle-login').hidden = Boolean(activeAccount);
+  get('open-moodle-login').hidden = Boolean(activeAccount);
+  get('moodle-logout').hidden = !activeAccount;
+  get('private-owner-settings').hidden = Boolean(activeAccount);
+}
+showMoodleSession();
+
+function resetCalendarView() {
+  privateRequest?.abort();
+  privateRequest = undefined;
+  clearTimeout(privateCheckTimer);
+  lastAutoAttempt = 0;
+  lastAiCheck = 0;
+  aiRun++;
+  privateCalendar = null;
+  syncedMonths = new Map();
+  get('new-tasks-notice').hidden = true;
+  get('task-sync-status').hidden = true;
+  get('local-ai-status').textContent = '';
+  loadPersonalData();
+  render();
+}
+
+function endMoodleSession(text) {
+  try {
+    localStorage.removeItem(personalKey(privateCalendarPrefix + privateServer));
+    sessionStorage.removeItem(accountSessionKey);
+  } catch {}
+  activeAccount = null;
+  privateServer = null;
+  privatePassword = null;
+  resetCalendarView();
+  showMoodleSession();
+  get('sync-now').hidden = true;
+  get('sync-tasks').hidden = true;
+  get('account-status').textContent = '';
+  get('moodle-sync').textContent = 'Entra con tu cuenta de Moodle para sincronizar el calendario.';
+  loginMessage(text);
+}
+
+get('open-moodle-login').addEventListener('click', () => {
+  document.querySelector('nav button[data-page="settings"]').click();
+  get('moodle-username').focus();
+});
+
+get('moodle-login').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  if (button.disabled) return;
+  const username = get('moodle-username').value.trim();
+  const password = get('moodle-password').value;
+  get('moodle-password').value = '';
+  button.disabled = true;
+  loginMessage('Conectando con Moodle Sevilla…');
+  try {
+    const response = await fetch(publicMoodleServer + '/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+      credentials: 'omit',
+      redirect: 'error',
+      signal: AbortSignal.timeout(150000)
+    });
+    if (!response.ok) {
+      if (response.status === 401) throw new Error('Moodle no confirmó el acceso. Revisa tus datos y vuelve a intentarlo.');
+      if (response.status === 429) throw new Error('Hay demasiados accesos. Prueba más tarde.');
+      throw new Error('No se pudo conectar con el servidor de Moodle.');
+    }
+    const { accountId, token, expires, calendar } = await response.json();
+    const entry = { accountId, token, expires };
+    if (!validAccount(entry) || !Array.isArray(calendar?.months) || !calendar.months.length) {
+      throw new Error('No se pudo leer el calendario de Moodle.');
+    }
+    activeAccount = entry;
+    accountMode = 'moodle';
+    privateServer = publicMoodleServer;
+    privatePassword = token;
+    try {
+      localStorage.setItem(accountModeKey, accountMode);
+      sessionStorage.setItem(accountModeKey, accountMode);
+      sessionStorage.setItem(accountSessionKey, JSON.stringify(entry));
+      sessionStorage.removeItem(privateServerSecret);
+    } catch {}
+    resetCalendarView();
+    showMoodleSession();
+    get('moodle-login').reset();
+    restorePrivateCalendar();
+    if (!savePrivateCalendar(calendar)) throw new Error('No se pudo leer el calendario de Moodle.');
+    loginMessage('Sesión de Moodle iniciada.');
+    checkPrivateCalendar();
+    document.querySelector('nav button[data-page="calendar"]').click();
+  } catch (error) {
+    loginMessage(error.name === 'Error' ? error.message : 'No se pudo conectar con el servidor de Moodle.');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+get('moodle-logout').addEventListener('click', () => {
+  const token = activeAccount?.token;
+  endMoodleSession('Sesión cerrada.');
+  if (token) fetch(publicMoodleServer + '/api/logout', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + token }, credentials: 'omit', redirect: 'error', keepalive: true
+  }).catch(() => {});
+});
+
 get('private-server-form').addEventListener('submit', event => {
   event.preventDefault();
   const address = privateServerOrigin(get('private-server-url').value.trim());
@@ -860,6 +1022,14 @@ get('private-server-form').addEventListener('submit', event => {
   }
   privateRequest?.abort();
   lastAutoAttempt = 0;
+  if (accountMode === 'moodle') {
+    accountMode = 'owner';
+    try {
+      localStorage.removeItem(accountModeKey);
+      sessionStorage.setItem(accountModeKey, accountMode);
+    } catch {}
+    resetCalendarView();
+  }
   if (privateServer !== address) syncedMonths = new Map();
   privateServer = address;
   privatePassword = get('private-server-key').value.trim();
@@ -884,7 +1054,7 @@ get('disconnect-private-server').addEventListener('click', () => {
   privateRequest = undefined;
   lastAutoAttempt = 0;
   clearTimeout(privateCheckTimer);
-  try { localStorage.removeItem(privateCalendarPrefix + privateServer); } catch {}
+  try { localStorage.removeItem(personalKey(privateCalendarPrefix + privateServer)); } catch {}
   privateServer = null;
   privatePassword = null;
   privateCalendar = null;
@@ -921,13 +1091,15 @@ if (location.origin === 'http://127.0.0.1:8765' ||
     window.postMessage({ type: 'agenda-campus:open-credentials' }, location.origin);
   });
   if (privateServer) {
-    get('private-server-url').value = privateServer;
-    get('disconnect-private-server').hidden = false;
+    if (!activeAccount) {
+      get('private-server-url').value = privateServer;
+      get('disconnect-private-server').hidden = false;
+    }
     get('sync-now').hidden = false;
     get('sync-tasks').hidden = false;
     restorePrivateCalendar();
     checkPrivateCalendar();
-  } else {
+  } else if (accountMode !== 'moodle') {
     window.postMessage({ type: 'agenda-campus:request-moodle-snapshots' }, location.origin);
   }
 }
@@ -941,7 +1113,7 @@ get('moodle-file').addEventListener('change', async event => {
   try {
     if (file.size > 5 * 1024 * 1024) throw new Error('El archivo supera los 5 MB. Exporta un periodo más corto.');
     const result = parseMoodleCalendar(await file.text());
-    localStorage.setItem(moodleKey, JSON.stringify(result.events));
+    localStorage.setItem(personalKey(moodleKey), JSON.stringify(result.events));
     moodleEvents = result.events;
     moodleLoaded = true;
     moodleStatus(result.skipped);
@@ -957,7 +1129,7 @@ get('moodle-file').addEventListener('change', async event => {
 
 get('clear-moodle').addEventListener('click', () => {
   try {
-    localStorage.removeItem(moodleKey);
+    localStorage.removeItem(personalKey(moodleKey));
     moodleLoaded = false;
     moodleEvents = [];
     moodleStatus();
