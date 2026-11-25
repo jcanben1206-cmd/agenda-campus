@@ -98,6 +98,10 @@ try {
   .theme-options label { display: flex; align-items: center; min-height: 44px; gap: .4rem; padding: .4rem .75rem; background: var(--soft); border-radius: .65rem; cursor: pointer; }
   .account-settings { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
   .account-link { display: inline-flex; align-items: center; min-height: 44px; padding: .45rem .75rem; border-radius: .65rem; background: #2946b5; color: white; font-weight: 650; }
+  .session-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; padding: .75rem; border-radius: .75rem; background: var(--control); }
+  .session-notice p { margin: 0; }
+  dialog { width: min(30rem, calc(100% - 1.5rem)); padding: 1.25rem; border: 1px solid var(--line); border-radius: 1rem; color: var(--text); background: var(--surface); }
+  dialog::backdrop { background: #10162599; }
   @media (max-width: 42rem) {
     body {
       padding: max(.9rem, env(safe-area-inset-top)) max(.7rem, env(safe-area-inset-right))
@@ -154,6 +158,14 @@ try {
   <p id="overview"></p>
   <p id="new-tasks-notice" role="status" hidden></p>
 </div>
+<aside class="session-notice" id="expired-notice" hidden>
+  <p role="status">Tu sesión de Moodle ha caducado. Puedes seguir viendo el calendario guardado.</p>
+  <button type="button" class="primary" id="resume-moodle">Iniciar sesión</button>
+</aside>
+<dialog id="resume-dialog" aria-labelledby="resume-title">
+  <div class="bar"><h2 id="resume-title">Volver a iniciar sesión</h2><button type="button" id="close-resume">Cerrar</button></div>
+  <div id="resume-fields"></div>
+</dialog>
 <nav aria-label="Secciones">
   <button type="button" data-page="tasks" aria-current="page">Tareas</button>
   <button type="button" data-page="calendar">Calendario</button>
@@ -989,6 +1001,7 @@ function showMoodleSession() {
   get('moodle-logout').hidden = !activeAccount && !rememberedAccount;
   get('moodle-logout').textContent = activeAccount ? 'Cerrar sesión de Moodle' : 'Ocultar calendario guardado';
   get('private-owner-settings').hidden = Boolean(activeAccount || rememberedAccount);
+  get('expired-notice').hidden = Boolean(activeAccount) || !rememberedAccount;
 }
 showMoodleSession();
 
@@ -1032,6 +1045,24 @@ function endMoodleSession(text, forget = false) {
 get('open-moodle-login').addEventListener('click', () => {
   document.querySelector('nav button[data-page="settings"]').click();
   get('moodle-username').focus();
+});
+
+const resumeDialog = get('resume-dialog');
+const loginForm = get('moodle-login');
+const loginStatus = get('moodle-login-status');
+const loginFormHome = loginForm.parentElement;
+const loginStatusNext = loginStatus.nextElementSibling;
+get('resume-moodle').addEventListener('click', () => {
+  get('resume-fields').append(loginForm, loginStatus);
+  loginMessage('');
+  resumeDialog.showModal();
+  get('moodle-username').focus();
+});
+get('close-resume').addEventListener('click', () => resumeDialog.close());
+resumeDialog.addEventListener('close', () => {
+  loginFormHome.insertBefore(loginForm, get('moodle-logout'));
+  loginFormHome.insertBefore(loginStatus, loginStatusNext);
+  get('moodle-password').value = '';
 });
 
 get('moodle-login').addEventListener('submit', async event => {
@@ -1082,7 +1113,8 @@ get('moodle-login').addEventListener('submit', async event => {
     get('sync-now').hidden = false;
     get('sync-tasks').hidden = false;
     checkPrivateCalendar();
-    document.querySelector('nav button[data-page="calendar"]').click();
+    if (resumeDialog.open) resumeDialog.close();
+    else document.querySelector('nav button[data-page="calendar"]').click();
   } catch (error) {
     loginMessage(error.name === 'Error' ? error.message : 'No se pudo conectar con el servidor de Moodle.');
   } finally {
