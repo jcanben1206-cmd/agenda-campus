@@ -862,6 +862,7 @@ async function queryPrivateServer(automatic = false) {
   privateRequest = request;
   lastAutoAttempt = Date.now();
   get('account-status').textContent = 'Comprobando Moodle desde el servidor privado…';
+  get('moodle-sync').textContent = 'Cargando el calendario de Moodle…';
   try {
     const response = await fetch(privateServer + (automatic ? '/api/auto-sync' : '/api/sync'), {
       method: 'POST',
@@ -978,8 +979,8 @@ get('moodle-login').addEventListener('submit', async event => {
     }
     const { accountId, token, expires, calendar } = await response.json();
     const entry = { accountId, token, expires };
-    if (!validAccount(entry) || !Array.isArray(calendar?.months) || !calendar.months.length) {
-      throw new Error('No se pudo leer el calendario de Moodle.');
+    if (!validAccount(entry)) {
+      throw new Error('El servidor no devolvió una sesión válida.');
     }
     activeAccount = entry;
     accountMode = 'moodle';
@@ -995,8 +996,10 @@ get('moodle-login').addEventListener('submit', async event => {
     showMoodleSession();
     get('moodle-login').reset();
     restorePrivateCalendar();
-    if (!savePrivateCalendar(calendar)) throw new Error('No se pudo leer el calendario de Moodle.');
+    if (calendar) savePrivateCalendar(calendar);
     loginMessage('Sesión de Moodle iniciada.');
+    get('sync-now').hidden = false;
+    get('sync-tasks').hidden = false;
     checkPrivateCalendar();
     document.querySelector('nav button[data-page="calendar"]').click();
   } catch (error) {

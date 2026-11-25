@@ -59,7 +59,7 @@ export class MoodleSession {
     if (Date.now() < this.#retryLoginAfter) throw new Error('Inicio de sesión pendiente de comprobar.');
     this.#retryLoginAfter = Date.now() + 15 * 60 * 1000;
     const { url, $ } = await this.page(moodle + loginPath + '?authCAS=CAS');
-    if (url.origin === moodle && $('a[href*="/login/logout.php"]').length) return;
+    if (url.origin === moodle && $('a[href*="/login/logout.php"]').length) return { url, $ };
     if (url.origin !== identity || url.searchParams.get('gateway') === 'true') throw new Error('EducaAnd no mostró el formulario previsto.');
     const service = new URL(url.searchParams.get('service') || '');
     if (service.origin !== moodle || service.pathname !== loginPath || service.searchParams.get('authCAS') !== 'CAS') {
@@ -79,6 +79,16 @@ export class MoodleSession {
     body.set('password', this.password);
     const result = await this.page(target, body);
     if (result.url.origin !== moodle || result.url.pathname === loginPath) throw new Error('EducaAnd no confirmó el inicio de sesión.');
+    return result;
+  }
+
+  async authenticate() {
+    const landing = await this.signIn();
+    if (landing.$('a[href*="/login/logout.php"]').length) return;
+    const page = await this.page(moodle + calendarPath + '?view=month');
+    if (page.url.pathname !== calendarPath || !page.$('a[href*="/login/logout.php"]').length) {
+      throw new Error('No se pudo verificar la sesión activa de Moodle.');
+    }
   }
 
   async snapshot(previousAssignments = {}) {

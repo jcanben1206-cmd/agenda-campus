@@ -90,11 +90,11 @@ async function login(request, response) {
   const session = calendarSession(new MoodleSession(entry.username, entry.password));
   activeLogins++;
   try {
-    const calendar = await sync(session, false);
+    await session.moodle.authenticate();
     const token = randomBytes(32).toString('base64url');
     session.expires = Date.now() + sessionLifetime;
     accounts.set(hash('Bearer ' + token).toString('hex'), session);
-    return send(response, 200, { accountId, token, expires: session.expires, calendar });
+    return send(response, 200, { accountId, token, expires: session.expires });
   } catch {
     return send(response, 401, { error: 'Moodle no confirmó el acceso. Revisa tus datos o prueba más tarde.' });
   } finally {
