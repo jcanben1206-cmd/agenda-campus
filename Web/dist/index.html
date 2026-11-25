@@ -20,12 +20,14 @@ try {
     --page: #f3f5fb; --surface: #fff; --text: #15213d; --blue: #2946b5; --line: #dce3f3; --muted: #4c5d79;
     --soft: #f0f3fc; --control: #e6ebfa; --control-text: #203581; --hover: #dae3ff; --agenda: #f8f9fd;
     --field-border: #9aa9ca; --status-bg: #e8edff; --status-text: #283d91; --done-bg: #e1f5ea; --done-text: #1a6040;
+    --pending-bg: #ffedd5; --pending-text: #8a3b0d; --late-bg: #fee2e2; --late-text: #9b2020;
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
     --page: #101625; --surface: #192236; --text: #eef2ff; --blue: #afc0ff; --line: #364363; --muted: #bdc8e2;
     --soft: #25314c; --control: #293757; --control-text: #e1e8ff; --hover: #364870; --agenda: #202b42;
     --field-border: #687ca5; --status-bg: #34466f; --status-text: #e4ebff; --done-bg: #224537; --done-text: #bcebd1;
+    --pending-bg: #573518; --pending-text: #ffdfb9; --late-bg: #592a32; --late-text: #ffd0d1;
   }
   a { color: var(--blue); }
   * { box-sizing: border-box; }
@@ -57,19 +59,15 @@ try {
   .meta { display: block; color: var(--muted); font-size: .9rem; margin-top: .25rem; }
   .status { flex: 0 0 auto; font-size: .875rem; font-weight: 650; border-radius: .5rem; padding: .28rem .45rem; background: var(--status-bg); color: var(--status-text); }
   .done { background: var(--done-bg); color: var(--done-text); }
+  .pending-task { background: var(--pending-bg); color: var(--pending-text); }
+  .late-task { background: var(--late-bg); color: var(--late-text); }
   .calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .2rem; text-align: center; margin: 1rem 0; }
   .weekday { color: var(--muted); font-size: .9rem; }
   .calendar button { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: .22rem; text-align: left; padding: .35rem clamp(.15rem, 1vw, .55rem); min-width: 0; background: var(--soft); }
   .calendar button[aria-pressed="true"] { background: #2946b5; color: white; }
-  .day-event { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; font-weight: 600; }
-  .day-more { font-size: .8125rem; }
+  .day-event { display: block; padding: .2rem .3rem; border-radius: .35rem; overflow-wrap: anywhere; font-size: .875rem; font-weight: 600; }
   .day-count { display: none; }
-  .day-expanded { position: absolute; z-index: 2; inset: -.1rem auto auto -.1rem; width: clamp(9rem, 36vw, 17rem); padding: .45rem .6rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface); color: var(--text); box-shadow: 0 .25rem .9rem #172b6233; pointer-events: none; visibility: hidden; opacity: 0; transform: translateY(3px) scale(.97); transform-origin: top left; transition: opacity 150ms ease, transform 180ms ease-out, visibility 180ms; }
-  .calendar button.align-right .day-expanded { inset-inline: auto -.1rem; transform-origin: top right; }
-  .day-expanded > span { display: block; margin-top: .3rem; overflow-wrap: anywhere; font-size: .875rem; font-weight: 600; }
-  .calendar button:focus-visible .day-expanded { visibility: visible; opacity: 1; transform: none; }
   @media (hover: hover) {
-    .calendar button:hover .day-expanded { visibility: visible; opacity: 1; transform: none; }
     button:not(.primary):not([aria-current="page"]):not([aria-pressed="true"]):hover, .date-group summary:hover { background: var(--hover); }
     button.primary:hover { box-shadow: 0 .2rem .6rem #2946b54d; }
   }
@@ -88,7 +86,11 @@ try {
   .moodle-settings input { padding: .45rem; }
   .moodle-settings [role="status"]:empty { display: none; }
   @media (min-width: 49rem) {
-    .calendar-layout { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); align-items: start; }
+    body:has(#calendar:not([hidden])) { max-width: none; }
+    .calendar-layout { grid-template-columns: minmax(0, 1fr) minmax(13rem, 24%); align-items: start; }
+    .calendar { gap: .4rem; }
+    .calendar button { min-height: 5rem; gap: .35rem; }
+    #moodle-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem; align-items: start; }
   }
   form { display: grid; gap: .8rem; margin: 1rem 0; }
   form label { display: grid; gap: .25rem; font-weight: 600; }
@@ -125,7 +127,7 @@ try {
     .bar h2 { flex: 1 1 100%; }
     .calendar { margin-bottom: 0; }
     .calendar button { align-items: center; justify-content: center; text-align: center; padding: .25rem 0; }
-    .day-event, .day-more { display: none; }
+    .day-event { display: none; }
     .day-count {
       display: block; min-width: 1.15rem; border-radius: 1rem; padding: .025rem .2rem;
       background: var(--status-bg); color: var(--status-text); font-size: .75rem; line-height: 1.05rem;
@@ -137,9 +139,6 @@ try {
     form, form label { min-width: 0; grid-template-columns: minmax(0, 1fr); }
     form > button, form .bar > button { width: 100%; }
     .account-settings > button, .account-link { margin-bottom: .35rem; }
-  }
-  @media (hover: none) {
-    .calendar button:focus-visible .day-expanded { visibility: hidden; }
   }
   [hidden] { display: none !important; }
   @keyframes reveal {
@@ -702,6 +701,17 @@ function nodes(tag, content, className) {
   return element;
 }
 
+function isPast(item, now = new Date()) {
+  return item.allDay ? dateKey(item.date) < dateKey(now) : item.date < now;
+}
+
+function taskBadge(item) {
+  if (item.state === 'submitted') return { label: 'Entregada', tone: 'done' };
+  if (item.state !== 'pending' && item.state !== 'draft') return { label: 'Sin verificar', tone: '' };
+  const label = item.state === 'draft' ? 'No entregado · Borrador' : 'No entregado';
+  return isPast(item) ? { label: 'Vencida · ' + label, tone: 'late-task' } : { label, tone: 'pending-task' };
+}
+
 function entries(id, items, empty, { allowDelete = false, newestFirst = false } = {}) {
   const list = get(id);
   list.replaceChildren();
@@ -741,8 +751,8 @@ function entries(id, items, empty, { allowDelete = false, newestFirst = false } 
       });
       row.append(remove);
     } else if (item.assignmentId) {
-      const label = { submitted: 'Entregada', draft: 'No entregado · Borrador', pending: 'No entregado', unknown: 'Sin verificar' };
-      row.append(nodes('span', label[item.state], item.state === 'submitted' ? 'status done' : 'status'));
+      const { label, tone } = taskBadge(item);
+      row.append(nodes('span', label, 'status ' + tone));
     } else if (item.kind === 'moodle') {
       row.append(nodes('span', 'Moodle', 'status'));
     } else {
@@ -777,19 +787,15 @@ function renderCalendar(all) {
     button.type = 'button';
     button.dataset.date = dayKey;
     const count = dayItems.length;
-    button.setAttribute('aria-label', [fullDate.format(date), ...dayItems.map(item => item.title)].join(', '));
+    button.setAttribute('aria-label', [fullDate.format(date), ...dayItems.map(item =>
+      item.assignmentId ? item.title + ' (' + taskBadge(item).label + ')' : item.title)].join(', '));
     button.setAttribute('aria-pressed', String(dayKey === dateKey(selected)));
-    for (const item of dayItems.slice(0, 2)) {
-      button.append(nodes('span', item.title, 'day-event'));
+    for (const item of dayItems) {
+      const tone = item.assignmentId ? taskBadge(item).tone : '';
+      button.append(nodes('span', item.title, 'day-event ' + tone));
     }
-    if (count > 2) button.append(nodes('span', '+' + (count - 2), 'day-more'));
     if (count) {
       button.append(nodes('span', String(count), 'day-count'));
-      if ((offset + day - 1) % 7 >= 4) button.classList.add('align-right');
-      const expanded = nodes('span', day, 'day-expanded');
-      expanded.setAttribute('aria-hidden', 'true');
-      for (const item of dayItems) expanded.append(nodes('span', item.title));
-      button.append(expanded);
     }
     button.addEventListener('click', () => {
       selected = date;
@@ -814,7 +820,6 @@ function upcomingEnd(today, weekly) {
 function render() {
   const current = new Date();
   const today = dateKey(current);
-  const isPast = item => item.allDay ? dateKey(item.date) < today : item.date < current;
   const isSubmitted = item => item.state === 'submitted';
   const isVisible = item => !isSubmitted(item) || dateKey(item.date) >= today;
   const synced = [...syncedMonths.values()].flatMap(snapshot => snapshot.events);
@@ -828,12 +833,12 @@ function render() {
   const pending = realTasks.filter(task => ['pending', 'draft'].includes(task.state));
   const completed = realTasks.filter(task => isSubmitted(task) && isVisible(task));
   const unknown = realTasks.filter(task => task.state === 'unknown');
-  const late = pending.filter(isPast);
+  const late = pending.filter(item => isPast(item, current));
   const received = moodleLoaded || syncedMonths.size > 0;
   get('task-source').textContent = syncedMonths.size
     ? 'Entregas con fecha en los meses sincronizados de Moodle.'
     : 'Abre Calendario para sincronizar tus tareas de Moodle.';
-  entries('task-upcoming', pending.filter(task => !isPast(task)), 'Sin próximas entregas.');
+  entries('task-upcoming', pending.filter(task => !isPast(task, current)), 'Sin próximas entregas.');
   entries('task-late', late, 'Sin entregas vencidas.', { newestFirst: true });
   get('task-completed').hidden = get('pending').checked;
   entries('task-done', completed, 'Sin tareas entregadas.');
@@ -849,9 +854,9 @@ function render() {
   get('moodle-groups').hidden = !received;
   const weekly = get('events-week').checked;
   const end = upcomingEnd(current, weekly);
-  entries('moodle-upcoming', realEvents.filter(item => !isPast(item) && item.date < end),
+  entries('moodle-upcoming', realEvents.filter(item => !isPast(item, current) && item.date < end),
     'Sin próximos eventos en este periodo.');
-  entries('moodle-late', realEvents.filter(isPast), 'Sin eventos vencidos.', { newestFirst: true });
+  entries('moodle-late', realEvents.filter(item => isPast(item, current)), 'Sin eventos vencidos.', { newestFirst: true });
   renderCalendar([...exams, ...realEvents]);
 }
 
