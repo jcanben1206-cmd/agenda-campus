@@ -240,6 +240,10 @@ try {
             <summary>Sin verificar</summary>
             <ul id="task-unknown"></ul>
           </details>
+          <details class="date-group" id="task-undated-group" hidden>
+            <summary>Sin fecha límite</summary>
+            <ul id="task-undated"></ul>
+          </details>
         </div>
       </div>
       <div class="task-actions">
@@ -311,6 +315,7 @@ try {
         <p class="summary">El servidor de Agenda Campus usa tus credenciales para entrar en Moodle Sevilla y descarta la contraseña al terminar el intento de inicio de sesión.</p>
         <label>Usuario de Moodle <input id="moodle-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" required></label>
         <label>Contraseña de Moodle <input id="moodle-password" name="password" type="password" autocomplete="current-password" maxlength="512" required></label>
+        <label><input type="checkbox" id="remember-session"> Mantener mi sesión en este dispositivo</label>
         <button type="submit" class="primary">Entrar con Moodle</button>
       </form>
       <button type="button" id="moodle-logout" hidden>Cerrar sesión de Moodle</button>
@@ -323,6 +328,18 @@ try {
       <button type="button" id="closed-notices" hidden>Activar avisos con la agenda cerrada</button>
       <p class="summary" id="closed-notices-status" role="status" hidden></p>
       <p class="summary" id="account-status" role="status">Entra con tu cuenta de Moodle para ver tus tareas y tu calendario.</p>
+      <details class="date-group" id="rest-settings" hidden>
+        <summary>Consultar tareas por API</summary>
+        <div class="moodle-settings">
+          <p>Usa un token de servicios web autorizado para Agenda Campus. Las tareas se muestran en esta pestaña y el token se envía directamente a Moodle Sevilla.</p>
+          <p id="rest-account-note" hidden>Cierra la sesión de Moodle u oculta el calendario guardado y desconecta el servidor privado para consultar otra cuenta.</p>
+          <label for="rest-token">Token de servicios web</label>
+          <input id="rest-token" type="password" autocomplete="off" spellcheck="false">
+          <button type="button" id="rest-read">Sincronizar tareas por API</button>
+          <button type="button" id="rest-clear" hidden>Cerrar consulta por API</button>
+          <p id="rest-status" role="status"></p>
+        </div>
+      </details>
       <details class="date-group">
         <summary>Sincronización e importación de Moodle</summary>
         <div class="moodle-settings">
@@ -360,12 +377,18 @@ const get = id => document.getElementById(id);
 const privateServerSetting = 'agenda-campus-private-server';
 const privateServerSecret = 'agenda-campus-private-access-key';
 const privateCalendarPrefix = 'agenda-campus-private-calendar-v1:';
-const publicMoodleServer = 'https://agenda-campus-moodle.onrender.com';
+const localEducaAnd = location.origin === 'http://127.0.0.1:8772';
+const publicMoodleServer = localEducaAnd ? location.origin : 'https://agenda-campus-moodle.onrender.com';
+if (localEducaAnd) {
+  get('moodle-login').action = '/api/login';
+  get('moodle-login').querySelector('p').textContent = 'Tu PC inicia sesión en EducaAnd y consulta la API del calendario de Moodle Sevilla. La contraseña se descarta al terminar el acceso.';
+}
 const backgroundNoticeKey = 'agenda-campus-closed-notices';
 let closedNotices = false;
 try { closedNotices = localStorage.getItem(backgroundNoticeKey) === 'on'; } catch {}
 const accountModeKey = 'agenda-campus-account-mode';
 const accountSessionKey = 'agenda-campus-account-session';
+const deviceLoginKey = 'agenda-campus-recordar-acceso';
 const rememberedAccountKey = 'agenda-campus-remembered-calendar';
 const rememberedUsernamePrefix = 'agenda-campus-moodle-username:';
 let accountMode;
@@ -409,7 +432,8 @@ function privateServerOrigin(value) {
 
 try {
   accountMode = sessionStorage.getItem(accountModeKey) || localStorage.getItem(accountModeKey);
-  const saved = JSON.parse(sessionStorage.getItem(accountSessionKey) || 'null');
+  const tabSession = JSON.parse(sessionStorage.getItem(accountSessionKey) || 'null');
+  const saved = validAccount(tabSession) ? tabSession : JSON.parse(localStorage.getItem(accountSessionKey) || 'null');
   if (validAccount(saved)) {
     accountMode = 'moodle';
     activeAccount = saved;
@@ -436,7 +460,7 @@ function validAccount(entry) {
 
 function updateClosedNotices() {
   const button = get('closed-notices');
-  button.hidden = Boolean(activeAccount || privateServer !== publicMoodleServer || !privatePassword ||
+  button.hidden = Boolean((activeAccount && !activeAccount.backgroundOwner) || privateServer !== publicMoodleServer || !privatePassword ||
     !('serviceWorker' in navigator) || !globalThis.PushManager || !globalThis.Notification ||
     location.origin !== 'https://jcanben1206-cmd.github.io');
   button.textContent = closedNotices ? 'Desactivar avisos con la agenda cerrada' : 'Activar avisos con la agenda cerrada';
@@ -626,6 +650,8 @@ let exams = [];
 let moodleEvents = [];
 let moodleLoaded = false;
 let syncedMonths = new Map();
+let restTasks = null;
+let restRead;
 let selected = now;
 let month = new Date(now.getFullYear(), now.getMonth(), 1);
 
@@ -754,6 +780,7 @@ function nodes(tag, content, className) {
 }
 
 function isPast(item, now = new Date()) {
+  if (!item.date) return false;
   return item.allDay ? dateKey(item.date) < dateKey(now) : item.date < now;
 }
 
@@ -799,7 +826,7 @@ function entries(id, items, empty, { allowDelete = false, newestFirst = false } 
       title.replaceChildren(link);
     }
     description.append(title);
-    const dateLabel = (item.allDay ? fullDate : shortDate).format(item.date);
+    const dateLabel = item.date ? (item.allDay ? fullDate : shortDate).format(item.date) : '';
     if (showPills) {
       const details = entryPills(item, dateLabel, { taskList, selectedDay });
       if (details.length) {
@@ -888,10 +915,19 @@ function upcomingEnd(today, weekly) {
 
 function render() {
   const current = new Date();
+  get('rest-settings').hidden = !window.isSecureContext || location.protocol === 'file:';
+  const otherConnection = Boolean(privateServer || rememberedAccount || activeAccount);
+  get('rest-account-note').hidden = !otherConnection;
+  get('rest-token').disabled = otherConnection || Boolean(restRead);
+  get('rest-read').disabled = get('rest-token').disabled;
   const today = dateKey(current);
   const isSubmitted = item => item.state === 'submitted';
   const isVisible = item => !isSubmitted(item) || dateKey(item.date) >= today;
-  const synced = [...syncedMonths.values()].flatMap(snapshot => snapshot.events);
+  const synced = restTasks?.filter(item => item.date) ?? [...syncedMonths.values()].flatMap(snapshot => snapshot.events);
+  const undated = (restTasks ?? []).filter(item => !item.date &&
+    (!get('pending').checked || ['pending', 'draft'].includes(item.state)));
+  get('task-undated-group').hidden = !undated.length;
+  entries('task-undated', undated, 'Sin tareas sin fecha.');
   const assignments = new Map();
   for (const item of synced) {
     if (item.assignmentId && (!assignments.has(item.assignmentId) || item.date > assignments.get(item.assignmentId).date)) {
@@ -903,9 +939,11 @@ function render() {
   const completed = realTasks.filter(task => isSubmitted(task) && isVisible(task));
   const unknown = realTasks.filter(task => task.state === 'unknown');
   const late = pending.filter(item => isPast(item, current));
-  const received = moodleLoaded || syncedMonths.size > 0;
+  const received = restTasks !== null || moodleLoaded || syncedMonths.size > 0;
   let taskSource = 'Pulsa Entrar con Moodle para ver tus entregas.';
-  if (!activeAccount && rememberedAccount) {
+  if (restTasks !== null) {
+    taskSource = 'Tareas consultadas por API. Puedes actualizarlas desde Ajustes → Consultar tareas por API.';
+  } else if (!activeAccount && rememberedAccount) {
     taskSource = 'Pulsa Iniciar sesión en el aviso superior para volver a actualizar tus entregas.';
   } else if (privateServer && !privatePassword) {
     taskSource = 'Vuelve a conectar el servidor privado en Ajustes → Cuenta de Moodle Sevilla para actualizar las entregas.';
@@ -921,7 +959,7 @@ function render() {
   entries('task-unknown', unknown, 'Sin tareas por verificar.');
   entries('exam-list', exams, 'Sin exámenes.', { allowDelete: true });
   get('clear-moodle').hidden = !moodleLoaded;
-  const imported = moodleEvents.filter(item => !syncedMonths.has(dateKey(item.date).slice(0, 7)));
+  const imported = restTasks !== null ? [] : moodleEvents.filter(item => !syncedMonths.has(dateKey(item.date).slice(0, 7)));
   const realEvents = [...imported, ...synced].filter(isVisible);
   get('overview').textContent = received
     ? realEvents.length + (realEvents.length === 1 ? ' evento de Moodle' : ' eventos de Moodle')
@@ -1168,6 +1206,7 @@ function showMoodleSession() {
 showMoodleSession();
 
 function resetCalendarView() {
+  closeRestRead();
   privateRequest?.abort();
   privateRequest = undefined;
   clearTimeout(privateCheckTimer);
@@ -1186,7 +1225,11 @@ function resetCalendarView() {
 function endMoodleSession(text, forget = false) {
   try {
     sessionStorage.removeItem(accountSessionKey);
+    const deviceSession = JSON.parse(localStorage.getItem(accountSessionKey) || 'null');
+    if (deviceSession?.token === activeAccount?.token || deviceSession?.expires <= Date.now()) localStorage.removeItem(accountSessionKey);
     if (forget) {
+      if (localStorage.getItem(deviceLoginKey) === rememberedAccount) localStorage.removeItem(deviceLoginKey);
+      navigator.credentials?.preventSilentAccess?.().catch(() => {});
       if (rememberedAccount) localStorage.removeItem(rememberedUsernamePrefix + rememberedAccount);
       if (localStorage.getItem(rememberedAccountKey) === rememberedAccount) localStorage.removeItem(rememberedAccountKey);
     }
@@ -1206,6 +1249,7 @@ function endMoodleSession(text, forget = false) {
   get('moodle-sync').textContent = 'Entra con tu cuenta de Moodle para sincronizar el calendario.';
   loginMessage(text);
   if (rememberedAccount) restorePrivateCalendar();
+  if (!forget) resumeDeviceLogin();
 }
 
 get('open-moodle-login').addEventListener('click', () => {
@@ -1218,6 +1262,21 @@ const loginForm = get('moodle-login');
 const loginStatus = get('moodle-login-status');
 const loginFormHome = loginForm.parentElement;
 const loginStatusNext = loginStatus.nextElementSibling;
+let attemptedDeviceLogin = false;
+async function resumeDeviceLogin() {
+  if (attemptedDeviceLogin || activeAccount || !rememberedAccount || !globalThis.PasswordCredential) return;
+  try {
+    if (localStorage.getItem(deviceLoginKey) !== rememberedAccount) return;
+    attemptedDeviceLogin = true;
+    const credential = await navigator.credentials.get({ password: true, mediation: 'silent' });
+    if (!credential || activeAccount || localStorage.getItem(deviceLoginKey) !== rememberedAccount ||
+        localStorage.getItem(rememberedUsernamePrefix + rememberedAccount) !== credential.id) return;
+    get('moodle-username').value = credential.id;
+    get('moodle-password').value = credential.password;
+    get('remember-session').checked = true;
+    loginForm.requestSubmit(loginForm.querySelector('button[type="submit"]'));
+  } catch {}
+}
 get('resume-moodle').addEventListener('click', () => {
   get('resume-fields').append(loginForm, loginStatus);
   loginMessage('');
@@ -1237,13 +1296,14 @@ get('moodle-login').addEventListener('submit', async event => {
   if (button.disabled) return;
   const username = get('moodle-username').value.trim();
   const password = get('moodle-password').value;
+  const remember = get('remember-session').checked;
   button.disabled = true;
   loginMessage('Conectando con Moodle Sevilla…');
   try {
     const response = await fetch(publicMoodleServer + '/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, remember }),
       credentials: 'omit',
       redirect: 'error',
       signal: AbortSignal.timeout(150000)
@@ -1253,8 +1313,8 @@ get('moodle-login').addEventListener('submit', async event => {
       if (response.status === 429) throw new Error('Hay demasiados accesos. Prueba más tarde.');
       throw new Error('No se pudo conectar con el servidor de Moodle.');
     }
-    const { accountId, token, expires, calendar } = await response.json();
-    const entry = { accountId, token, expires };
+    const { accountId, token, expires, calendar, backgroundOwner } = await response.json();
+    const entry = { accountId, token, expires, backgroundOwner: backgroundOwner === true };
     if (!validAccount(entry)) {
       throw new Error('El servidor no devolvió una sesión válida.');
     }
@@ -1267,7 +1327,11 @@ get('moodle-login').addEventListener('submit', async event => {
       localStorage.setItem(accountModeKey, accountMode);
       localStorage.setItem(rememberedUsernamePrefix + accountId, username);
       sessionStorage.setItem(accountModeKey, accountMode);
-      sessionStorage.setItem(accountSessionKey, JSON.stringify(entry));
+      localStorage.removeItem(accountSessionKey);
+      sessionStorage.removeItem(accountSessionKey);
+      (remember ? localStorage : sessionStorage).setItem(accountSessionKey, JSON.stringify(entry));
+      if (remember) localStorage.setItem(deviceLoginKey, accountId);
+      else localStorage.removeItem(deviceLoginKey);
       sessionStorage.removeItem(privateServerSecret);
     } catch {}
     resetCalendarView();
@@ -1275,7 +1339,10 @@ get('moodle-login').addEventListener('submit', async event => {
     get('moodle-login').reset();
     restorePrivateCalendar();
     if (calendar) savePrivateCalendar(calendar);
-    loginMessage('Sesión de Moodle iniciada.');
+    loginMessage(entry.backgroundOwner ? 'Sesión iniciada. La cuenta se actualiza también con el dispositivo apagado.' : 'Sesión de Moodle iniciada.');
+    if (remember && globalThis.PasswordCredential && !attemptedDeviceLogin) {
+      navigator.credentials.store(new PasswordCredential({ id: username, password })).catch(() => {});
+    }
     get('sync-now').hidden = false;
     get('sync-tasks').hidden = false;
     checkPrivateCalendar();
@@ -1304,6 +1371,7 @@ get('private-server-form').addEventListener('submit', event => {
     get('account-status').textContent = 'Introduce la dirección HTTPS base del servicio en onrender.com.';
     return;
   }
+  closeRestRead();
   privateRequest?.abort();
   lastAutoAttempt = 0;
   if (accountMode === 'moodle') {
@@ -1358,7 +1426,7 @@ get('disconnect-private-server').addEventListener('click', () => {
   window.postMessage({ type: 'agenda-campus:request-moodle-snapshots' }, location.origin);
 });
 
-if (location.origin === 'http://127.0.0.1:8765' ||
+if (localEducaAnd || location.origin === 'http://127.0.0.1:8765' ||
     (location.protocol === 'https:' && /^[a-z0-9-]+\.github\.io$/.test(location.hostname))) {
   get('sync-tasks').addEventListener('click', () => {
     get('task-sync-status').hidden = false;
@@ -1366,6 +1434,13 @@ if (location.origin === 'http://127.0.0.1:8765' ||
     get('sync-now').click();
   });
   get('sync-now').addEventListener('click', () => {
+    if (restTasks !== null) {
+      document.querySelector('nav button[data-page="settings"]').click();
+      get('rest-settings').open = true;
+      get('rest-token').focus();
+      get('task-sync-status').hidden = true;
+      return;
+    }
     if (privateServer) {
       queryPrivateServer();
       return;
@@ -1389,6 +1464,105 @@ if (location.origin === 'http://127.0.0.1:8765' ||
     window.postMessage({ type: 'agenda-campus:request-moodle-snapshots' }, location.origin);
   }
 }
+
+function closeRestRead() {
+  restRead?.abort();
+  restRead = undefined;
+  restTasks = null;
+  get('rest-token').value = '';
+  get('rest-status').textContent = '';
+  get('rest-clear').hidden = true;
+}
+
+async function readRestTasks(token, signal) {
+  async function callMoodle(func, params = {}) {
+    const response = await fetch('https://educacionadistancia.juntadeandalucia.es/centros/sevilla/webservice/rest/server.php', {
+      method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer',
+      body: new URLSearchParams({ wstoken: token, wsfunction: func, moodlewsrestformat: 'json', ...params }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(20000)])
+    });
+    if (!response.ok) throw new Error('Moodle no pudo completar la consulta.');
+    const data = await response.json();
+    if (data?.errorcode === 'invalidtoken') {
+      throw new Error('Moodle ha rechazado el token. Comprueba que sigue vigente y corresponde a Moodle Sevilla.', { cause: 'invalidtoken' });
+    }
+    if (data?.exception || data?.errorcode) throw new Error('Moodle no ha autorizado la función ' + func + '.');
+    return data;
+  }
+
+  const data = await callMoodle('mod_assign_get_assignments');
+  if (!Array.isArray(data?.courses)) throw new Error('Moodle devolvió una lista de cursos inesperada.');
+  const tasks = [];
+  let undated = 0;
+  for (const course of data.courses) {
+    if (!Array.isArray(course.assignments)) throw new Error('Moodle devolvió un curso sin lista de tareas.');
+    for (const task of course.assignments) {
+      if (!Number.isSafeInteger(task.id) || !Number.isSafeInteger(task.cmid) || typeof task.name !== 'string') {
+        throw new Error('Moodle devolvió una tarea con formato inesperado.');
+      }
+      let deadline = Number(task.duedate) || 0;
+      let state = 'unknown';
+      if (!Number(task.nosubmissions)) {
+        let attempt;
+        try {
+          const status = await callMoodle('mod_assign_get_submission_status', { assignid: String(task.id) });
+          attempt = status?.lastattempt;
+        } catch (error) {
+          if (signal.aborted || error.cause === 'invalidtoken') throw error;
+        }
+        deadline = Math.max(deadline, Number(attempt?.extensionduedate) || 0);
+        if (Number(attempt?.submissionsenabled) === 1) {
+          const record = Number(task.teamsubmission) ? attempt.teamsubmission : attempt.submission;
+          const groupIncomplete = Number(task.teamsubmission) && Number(task.requireallteammemberssubmit) &&
+            attempt.submission?.status === 'submitted' && record?.status !== 'submitted';
+          if (!groupIncomplete) {
+            if (record?.status === 'submitted' || record?.status === 'draft') state = record.status;
+            else if (['new', 'reopened'].includes(record?.status)) state = 'pending';
+          }
+        }
+      }
+      const date = new Date(deadline * 1000);
+      const hasDate = deadline > 0 && Number.isFinite(+date);
+      if (!hasDate) undated++;
+      tasks.push({ title: task.name, assignmentId: String(task.cmid), course: course.fullname || '',
+        kind: 'moodle', date: hasDate ? date : null, allDay: false, state });
+    }
+  }
+  return { tasks, undated, warnings: data.warnings?.length || 0 };
+}
+
+get('rest-clear').addEventListener('click', () => { closeRestRead(); render(); });
+get('rest-read').addEventListener('click', async () => {
+  const token = get('rest-token').value.trim();
+  if (!token) {
+    get('rest-status').textContent = 'Introduce el token de servicios web para consultar Moodle.';
+    get('rest-token').focus();
+    return;
+  }
+  if (restRead || privateServer || activeAccount || rememberedAccount) return;
+  closeRestRead();
+  const request = new AbortController();
+  restRead = request;
+  get('rest-clear').hidden = false;
+  get('rest-status').textContent = 'Consultando las fechas y el estado de las entregas…';
+  render();
+  try {
+    const { tasks, undated, warnings } = await readRestTasks(token, request.signal);
+    if (request.signal.aborted) return;
+    restTasks = tasks;
+    get('rest-status').textContent = 'Consulta completada. Tareas con fecha: ' + (tasks.length - undated) +
+      '. Sin fecha: ' + undated + '. Puedes ver las fechas en Tareas y Calendario.' +
+      (warnings ? ' Moodle ha indicado que la lista puede estar incompleta.' : '');
+  } catch (error) {
+    if (request.signal.aborted) return;
+    get('rest-status').textContent = error.name === 'Error' ? error.message : 'No se pudo leer la API de Moodle. Vuelve a intentarlo.';
+  } finally {
+    if (restRead === request) {
+      restRead = undefined;
+      render();
+    }
+  }
+});
 
 get('moodle-file').addEventListener('change', async event => {
   const input = event.currentTarget;
@@ -1465,6 +1639,7 @@ function refreshAtMidnight() {
   }, tomorrow - now + 50);
 }
 refreshAtMidnight();
+resumeDeviceLogin();
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     render();

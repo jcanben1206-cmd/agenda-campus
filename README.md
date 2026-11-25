@@ -2,9 +2,9 @@
 
 ## Avisos con la agenda cerrada
 
-El flujo **Check Moodle in the background** consulta cada cinco minutos la cuenta del propietario configurada en Render. GitHub usa un token temporal de identidad del flujo. El historial necesario para comparar fechas y estados y las suscripciones push se guardan cifrados en un artefacto de cada ejecución. La primera lectura establece una referencia sin emitir un aviso.
+El flujo **Check Moodle in the background** está programado cada cinco minutos para la cuenta del propietario configurada en Render. GitHub puede retrasar las ejecuciones. Render inicia sesión en EducaAnd con las credenciales configuradas allí y consulta la API del calendario de Moodle. GitHub identifica cada ejecución ante Render y conserva el calendario, las entregas y las suscripciones push en un artefacto cifrado. La primera lectura establece la referencia para los avisos.
 
-Para recibir avisos, usa la conexión del propietario en Agenda Campus y pulsa **Ajustes → Cuenta de Moodle Sevilla → Activar avisos con la agenda cerrada** en cada dispositivo. En iPhone, añade la web a la pantalla de inicio y ábrela desde ahí para permitir avisos. Las demás cuentas se siguen sincronizando con la agenda abierta.
+Entra con tu usuario y contraseña de EducaAnd en **Entrar con Moodle**. La cuenta que coincide con la configurada en Render recibe el calendario del proceso en segundo plano. Para recibir avisos, pulsa **Ajustes → Cuenta de Moodle Sevilla → Activar avisos con la agenda cerrada** en cada dispositivo. En iPhone, añade la web a la pantalla de inicio y ábrela desde ahí para permitir avisos. Las demás cuentas se sincronizan con la agenda abierta.
 
 ## Abrir desde GitHub Pages
 
@@ -16,7 +16,7 @@ El sitio de GitHub Pages es visible públicamente en la configuración habitual.
 
 ### Sincronizar desde un servidor privado
 
-Los estudiantes de Moodle Sevilla pueden usar **Entrar con Moodle** en la web con su propio usuario y contraseña. Cada sesión usa su propio calendario, sus propios estados de entrega y su propio espacio local de exámenes. El servidor descarta la contraseña tras iniciar sesión y mantiene la sesión en memoria. Si Moodle cierra la sesión, pasan 12 horas o Render reinicia el servicio, vuelve a entrar. En un ordenador compartido, usa **Cerrar sesión de Moodle** al terminar.
+Los estudiantes de Moodle Sevilla pueden usar **Entrar con Moodle** en la web con su propio usuario y contraseña. El servidor lee los meses actual y siguiente a través de la sesión de EducaAnd y consulta los estados en las fichas de tarea. Cada cuenta tiene su propio espacio de exámenes. **Mantener mi sesión en este dispositivo** conserva el acceso de Agenda Campus al cerrar el navegador hasta 30 días. Con la casilla desactivada, el acceso dura hasta 12 horas y pertenece a la pestaña. Si se pierde la sesión del servidor, la web puede volver a entrar con el gestor de contraseñas cuando el navegador lo permita. En otros casos solicitará el acceso de nuevo. **Cerrar sesión de Moodle** elimina el acceso guardado en la agenda. La comprobación programada del propietario funciona independientemente del navegador.
 
 El acceso con clave de Render sigue disponible para la configuración inicial del propietario.
 
@@ -28,6 +28,8 @@ El acceso con clave de Render sigue disponible para la configuración inicial de
 El navegador conserva la clave de acceso durante la sesión de la pestaña y guarda en este dispositivo los meses ya sincronizados. Render consulta el mes actual y el siguiente bajo demanda. Cada lectura correcta actualiza esos meses y conserva el historial de meses anteriores. Al desconectar el servidor se borra la copia local. El acceso real depende de que EducaAnd admita el inicio de sesión desde Render.
 
 ## Demo web local para Windows
+
+Para consultar los datos reales en este PC, desde la carpeta `Server` instala las dependencias con `npm ci` (Node.js 22.16 o posterior) y ejecuta `npm run local`. Abre `http://127.0.0.1:8772/` y pulsa **Entrar con Moodle**. El servidor escucha solo en este PC. Inicia sesión en EducaAnd, lee el mes actual y el siguiente mediante la API del calendario de Moodle y consulta las fichas de entrega con la misma sesión. **Cerrar sesión de Moodle** cierra la conexión de la agenda. Para detener el servidor pulsa Ctrl+C en su terminal.
 
 1. En el Explorador de archivos, abre la carpeta `Web` y haz doble clic en **Abrir en Windows.cmd**. Se abre tu navegador habitual en `http://127.0.0.1:8765/`.
 2. Deja abierta la ventana del servidor mientras usas la demo. Los exámenes se guardan en el navegador. Cierra la ventana del servidor cuando termines.

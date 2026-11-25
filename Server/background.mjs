@@ -20,7 +20,7 @@ export async function isScheduledRequest(authorization) {
     if (alg !== 'RS256' || typeof kid !== 'string' || iss !== issuer || aud !== audience ||
         !Number.isFinite(exp) || exp <= now || !Number.isFinite(nbf) || nbf > now + 15 ||
         repo !== repository || workflow !== repository + '/.github/workflows/moodle-check.yml@refs/heads/main' ||
-        !['schedule', 'workflow_dispatch'].includes(event)) return false;
+        !['schedule', 'workflow_dispatch', 'push'].includes(event)) return false;
     if (Date.now() >= githubKeysUntil || !githubKeys?.has(kid)) {
       const response = await fetch(issuer + '/.well-known/jwks', { signal: AbortSignal.timeout(8000), redirect: 'error' });
       if (!response.ok) return false;
@@ -49,7 +49,7 @@ function normalizeSubscription(value) {
   }
 }
 
-export function moodleBackground(secret) {
+export function moodleBackground(secret, username) {
   const derive = label => createHash('sha256').update(label + '\0' + secret).digest();
   const stateKey = derive('agenda-campus-background-state');
   const curve = createECDH('prime256v1');
@@ -70,23 +70,27 @@ export function moodleBackground(secret) {
   }
 
   function restore(sealed) {
-    if (typeof sealed !== 'string' || sealed.length > 64000) return;
+    if (typeof sealed !== 'string' || sealed.length > 4 * 1024 * 1024) return;
     try {
       const [iv, tag, bytes] = sealed.split('.').map(part => Buffer.from(part, 'base64url'));
       const decipher = createDecipheriv('aes-256-gcm', stateKey, iv);
       decipher.setAuthTag(tag);
       const stored = JSON.parse(Buffer.concat([decipher.update(bytes), decipher.final()]));
+      if (stored.username && stored.username !== username) return;
       if (!previous) previous = stored.previous;
       for (const subscription of stored.subscriptions) {
         if (!subscriptions.has(subscription.endpoint)) subscribe(subscription);
       }
+      return stored.username === username ? stored.calendar : undefined;
     } catch {}
   }
 
-  function seal() {
+  function seal(calendar) {
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', stateKey, iv);
-    const bytes = Buffer.concat([cipher.update(JSON.stringify({ previous, subscriptions: [...subscriptions.values()] })), cipher.final()]);
+    const bytes = Buffer.concat([cipher.update(JSON.stringify({
+      username, previous, calendar, subscriptions: [...subscriptions.values()]
+    })), cipher.final()]);
     return [iv, cipher.getAuthTag(), bytes].map(part => part.toString('base64url')).join('.');
   }
 
@@ -118,7 +122,7 @@ export function moodleBackground(secret) {
         }
       }));
     }
-    return { changed, state: seal() };
+    return { changed, state: seal(calendar) };
   }
 
   return { publicKey, subscribe, restore, check };

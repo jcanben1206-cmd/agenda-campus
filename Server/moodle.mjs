@@ -17,11 +17,13 @@ export class MoodleSession {
   #retryLoginAfter = 0;
   #cursor = 0;
   #courseNames = new Map();
+  #sessionKey;
 
-  constructor(username, password, fetchPage = fetch) {
+  constructor(username, password, fetchPage = fetch, useCalendarApi = false) {
     this.username = username;
     this.password = password;
     this.fetchPage = fetchPage;
+    this.useCalendarApi = useCalendarApi;
   }
 
   forgetCredentials() {
@@ -84,19 +86,86 @@ export class MoodleSession {
   }
 
   async authenticate() {
-    const landing = await this.signIn();
-    if (landing.$('a[href*="/login/logout.php"]').length) return;
-    const page = await this.page(moodle + calendarPath + '?view=month');
-    if (page.url.pathname !== calendarPath || !page.$('a[href*="/login/logout.php"]').length) {
-      throw new Error('No se pudo verificar la sesión activa de Moodle.');
+    let page = await this.signIn();
+    if (!page.$('a[href*="/login/logout.php"]').length) {
+      page = await this.page(moodle + calendarPath + '?view=month');
+      if (page.url.pathname !== calendarPath || !page.$('a[href*="/login/logout.php"]').length) {
+        throw new Error('No se pudo verificar la sesión activa de Moodle.');
+      }
     }
+    if (this.useCalendarApi) {
+      const logout = page.$('a[href*="/login/logout.php"]').first().attr('href');
+      this.#sessionKey = new URL(logout, page.url).searchParams.get('sesskey');
+      if (!this.#sessionKey) throw new Error('Moodle no pudo preparar la sesión del calendario.');
+    }
+  }
+
+  async #apiMonths(dates) {
+    const endpoint = new URL(moodle + base + '/lib/ajax/service.php');
+    endpoint.searchParams.set('sesskey', this.#sessionKey);
+    const calls = dates.map((month, index) => ({
+      index, methodname: 'core_calendar_get_calendar_monthly_view',
+      args: { year: month.getFullYear(), month: month.getMonth() + 1, includenavigation: false }
+    }));
+    const result = await this.fetchPage(endpoint, {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(30000),
+      headers: { Cookie: await this.#jar.getCookieString(endpoint.href), 'Content-Type': 'application/json' },
+      body: JSON.stringify(calls)
+    });
+    if (!result.ok) throw new Error('No se pudo consultar la API del calendario.');
+    const rows = await result.json();
+    const loginErrors = ['requireloginerror', 'invalidsesskey', 'servicerequireslogin', 'servicerequiresloginwantsurl'];
+    if (loginErrors.includes(rows?.errorcode) || (Array.isArray(rows) && rows.some(row =>
+      loginErrors.includes(row?.exception?.errorcode)))) throw new MoodleLoginRequired();
+    if (!Array.isArray(rows) || rows.length !== dates.length) throw new Error('Respuesta incompleta del calendario.');
+    return rows.map((row, index) => {
+      const data = row?.data;
+      const { year, month } = calls[index].args;
+      if (row.error || data?.date?.year !== year || data.date.mon !== month || !Array.isArray(data.weeks)) {
+        throw new Error('Moodle no confirmó el mes solicitado.');
+      }
+      const period = year + '-' + String(month).padStart(2, '0');
+      const days = data.weeks.flatMap(week => week.days);
+      if (days.length !== new Date(year, month, 0).getDate()) throw new Error('Calendario mensual incompleto.');
+      const events = new Map();
+      for (const [i, day] of days.entries()) {
+        if (day?.mday !== i + 1 || !Array.isArray(day.events)) throw new Error('Día de calendario inesperado.');
+        for (const event of day.events) {
+          const dayKey = period + '-' + String(day.mday).padStart(2, '0');
+          const url = URL.parse(event.url, moodle);
+          const id = url?.searchParams.get('id');
+          const assignmentId = url?.origin === moodle && url.pathname === assignmentPath && /^\d{1,18}$/.test(id) ? id : null;
+          if (!Number.isSafeInteger(event.id) || typeof event.name !== 'string') throw new Error('Evento de calendario inesperado.');
+          events.set(dayKey + ':' + event.id, { day: dayKey, title: load(event.name, null, false).text().slice(0, 500), assignmentId });
+        }
+      }
+      return { month: period, events: [...events.values()] };
+    });
   }
 
   async snapshot(previousAssignments = {}, previousDetails = {}) {
     const now = new Date();
+    const dates = [0, 1].map(offset => new Date(now.getFullYear(), now.getMonth() + offset, 15));
+    let months;
+    if (this.useCalendarApi) {
+      if (!this.#sessionKey) await this.authenticate();
+      try { months = await this.#apiMonths(dates); }
+      catch (error) {
+        if (!(error instanceof MoodleLoginRequired) || !this.password) throw error;
+        this.#sessionKey = undefined;
+        await this.authenticate();
+        months = await this.#apiMonths(dates);
+      }
+      this.#retryLoginAfter = 0;
+    } else {
+      months = await this.#htmlMonths(dates);
+    }
+    return this.#withTaskDetails(months, previousAssignments, previousDetails);
+  }
+
+  async #htmlMonths(dates) {
     const months = [];
-    for (const offset of [0, 1]) {
-      const month = new Date(now.getFullYear(), now.getMonth() + offset, 15);
+    for (const month of dates) {
       const date = month.getFullYear() + '-' + String(month.getMonth() + 1).padStart(2, '0');
       const url = moodle + calendarPath + '?view=month&time=' + Math.floor(+month / 1000);
       let page = await this.page(url);
@@ -111,12 +180,15 @@ export class MoodleSession {
       this.#retryLoginAfter = 0;
       months.push({ month: date, events });
     }
+    return months;
+  }
 
+  async #withTaskDetails(months, previousAssignments, previousDetails) {
     const ids = [...new Set(months.flatMap(month => month.events.map(event => event.assignmentId).filter(Boolean)))];
     const assignments = Object.fromEntries(ids.filter(id => previousAssignments[id]).map(id => [id, previousAssignments[id]]));
     const taskDetails = Object.fromEntries(ids.filter(id => previousDetails[id]).map(id => [id, previousDetails[id]]));
     const start = this.#cursor % (ids.length || 1);
-    const limit = Math.min(18, ids.length);
+    const limit = this.useCalendarApi ? ids.length : Math.min(18, ids.length);
     for (let index = 0; index < limit; index += 3) {
       const batch = Array.from({ length: Math.min(3, limit - index) }, (_, offset) => ids[(start + index + offset) % ids.length]);
       await Promise.all(batch.map(async id => {
