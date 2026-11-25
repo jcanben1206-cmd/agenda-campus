@@ -134,7 +134,7 @@ function readCalendar($, month, pageUrl) {
       if (!title || !/^\d{1,18}$/.test(eventId)) return;
       const eventType = link.closest('li').attr('data-event-eventtype');
       let assignmentId = null;
-      if (!eventType || eventType === 'due') {
+      if (!eventType || eventType === 'due' || eventType === 'extension') {
         try {
           const url = new URL(link.attr('href'), pageUrl);
           const id = url.searchParams.get('id');
@@ -154,10 +154,10 @@ function readSubmission($) {
   if (table.find('.submissionstatusreopened, .submissionstatusnew').length) return 'pending';
   const normalize = value => value.trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.!]$/, '');
   const row = table.find('tr').filter((_, element) =>
-    /^(estado de (la )?entrega|submission status)$/.test(normalize($(element).children().first().text()))).first();
+    /^(estado de (la )?entrega|submission status):?$/.test(normalize($(element).children().first().text()))).first();
   const value = normalize((row.length ? row.children().last() : table.find('.submissionstatus').first()).text());
   if (/^(entregad[oa]( para (calificar|evaluar))?|enviad[oa] para (calificar|evaluar)|submitted for grading)$/.test(value)) return 'submitted';
   if (/^(borrador|draft)(\s|$)/.test(value)) return 'draft';
-  if (/^(sin entregar|no entregad[oa]|no se ha enviado (nada|ninguna entrega)( para esta tarea)?|nothing (has been )?submitted for this assignment|no submission)$/.test(value)) return 'pending';
+  if (/^(sin (entregar|entrega|env[ií]o)|no entregad[oa]|no enviad[oa]|a[uú]n no (hay|ha habido) (entrega|env[ií]o)s?|no (hay|ha habido) (ning[uú]n[ao] )?(entrega|env[ií]o)s?|no se ha (enviado|entregado|realizado) (nada|ninguna entrega|ning[uú]n env[ií]o|esta tarea)( (para|en) esta tarea)?|nothing (has been )?submitted for this assignment|no submission(?: yet)?)$/.test(value)) return 'pending';
   return null;
 }

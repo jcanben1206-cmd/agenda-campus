@@ -49,7 +49,9 @@ function send(response, status, body) {
 
 createServer(async (request, response) => {
   const { method, url, headers } = request;
-  if (method === 'GET' && url === '/health') return send(response, 200, { ok: true });
+  if (method === 'GET' && url === '/health') {
+    return send(response, 200, { ok: true, revision: process.env.RENDER_GIT_COMMIT || null });
+  }
   if (!['/api/calendar', '/api/sync'].includes(url)) return send(response, 404, { error: 'Ruta desconocida.' });
   if (headers.origin !== AGENDA_ORIGIN) return send(response, 403, { error: 'Origen no autorizado.' });
   response.setHeader('Access-Control-Allow-Origin', AGENDA_ORIGIN);

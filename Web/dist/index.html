@@ -123,8 +123,13 @@ try {
 </nav>
 <main>
   <section class="panel" id="tasks">
-    <div class="bar"><h2>Entregas</h2><label><input type="checkbox" id="pending"> Solo pendientes</label></div>
+    <div class="bar">
+      <h2>Entregas</h2>
+      <label><input type="checkbox" id="pending"> Solo pendientes</label>
+      <button type="button" id="sync-tasks" hidden>Actualizar tareas</button>
+    </div>
     <p class="summary" id="task-source">Abre Calendario para sincronizar tus tareas de Moodle.</p>
+    <p class="summary" id="task-sync-status" role="status" hidden></p>
     <details class="date-group" open>
       <summary>Próximas entregas</summary>
       <ul id="task-upcoming"></ul>
@@ -658,6 +663,7 @@ window.addEventListener('message', event => {
   if (privateServer) return;
   if (event.data?.type === 'agenda-campus:sync-error') {
     get('account-status').textContent = 'No se pudo iniciar la comprobación.';
+    if (!get('task-sync-status').hidden) get('task-sync-status').textContent = get('account-status').textContent;
     return;
   }
   if (event.data?.type !== 'agenda-campus:moodle-snapshots' || !Array.isArray(event.data.months)) return;
@@ -677,8 +683,9 @@ function applyMoodleSnapshot(data, { cached = false } = {}) {
           item.day.slice(0, 7) !== snapshot.month) continue;
       const date = calendarDate(item.day.replace(/-/g, ''), false);
       if (!date) continue;
-      const assignmentId = typeof item.assignmentId === 'string' && /^\d{1,18}$/.test(item.assignmentId)
-        ? item.assignmentId : null;
+      const rawId = typeof item.assignmentId === 'string' || Number.isSafeInteger(item.assignmentId)
+        ? String(item.assignmentId) : '';
+      const assignmentId = /^\d{1,18}$/.test(rawId) ? rawId : null;
       const state = assignmentId ? data.assignments?.[assignmentId] : null;
       events.push({
         date, title: item.title, allDay: true, kind: 'moodle', assignmentId,
@@ -691,6 +698,7 @@ function applyMoodleSnapshot(data, { cached = false } = {}) {
   syncedMonths = months;
   get('account-credentials').hidden = Boolean(privateServer);
   get('sync-now').hidden = false;
+  get('sync-tasks').hidden = false;
   const latest = [...months.values()].reduce((time, snapshot) => Math.max(time, snapshot.updatedAt), 0);
   const checkedAt = Number(data.refresh?.checkedAt);
   const lastRead = data.refresh?.status === 'ok' && Number.isFinite(+new Date(checkedAt))
@@ -706,6 +714,7 @@ function applyMoodleSnapshot(data, { cached = false } = {}) {
   if (cached) status = 'Mostrando los datos guardados en este navegador.';
   get('moodle-sync').textContent = latestLabel + status;
   get('account-status').textContent = latestLabel + status;
+  if (!get('task-sync-status').hidden) get('task-sync-status').textContent = latestLabel + status;
   render();
   if (refresh === 'ok' && !cached) summarizeMoodleChanges(months, checkedAt);
   if (!privateServer && aiEnabled && !checkedOnOpen) {
@@ -751,6 +760,7 @@ async function queryPrivateServer(refresh) {
   if (!privatePassword) {
     get('account-status').textContent = (privateCalendar ? 'Se muestran los datos guardados. ' : '') +
       'Introduce la clave del servidor para actualizar Moodle.';
+    if (!get('task-sync-status').hidden) get('task-sync-status').textContent = get('account-status').textContent;
     return;
   }
   privateRequest?.abort();
@@ -783,6 +793,7 @@ async function queryPrivateServer(refresh) {
       const notice = status + (privateCalendar ? ' Se mantienen los datos guardados.' : '');
       get('account-status').textContent = notice;
       get('moodle-sync').textContent = notice;
+      if (!get('task-sync-status').hidden) get('task-sync-status').textContent = notice;
     }
   }
 }
@@ -801,6 +812,7 @@ get('private-server-form').addEventListener('submit', event => {
   get('private-server-url').value = address;
   get('private-server-key').value = '';
   get('sync-now').hidden = false;
+  get('sync-tasks').hidden = false;
   get('account-credentials').hidden = true;
   get('disconnect-private-server').hidden = false;
   checkedOnOpen = true;
@@ -824,6 +836,8 @@ get('disconnect-private-server').addEventListener('click', () => {
   get('private-server-form').reset();
   get('disconnect-private-server').hidden = true;
   get('sync-now').hidden = true;
+  get('sync-tasks').hidden = true;
+  get('task-sync-status').hidden = true;
   get('account-status').textContent = 'Servidor desconectado.';
   get('moodle-sync').textContent = 'Conecta Moodle para consultar tus eventos.';
   render();
@@ -832,6 +846,11 @@ get('disconnect-private-server').addEventListener('click', () => {
 
 if (location.origin === 'http://127.0.0.1:8765' ||
     (location.protocol === 'https:' && /^[a-z0-9-]+\.github\.io$/.test(location.hostname))) {
+  get('sync-tasks').addEventListener('click', () => {
+    get('task-sync-status').hidden = false;
+    get('task-sync-status').textContent = 'Comprobando los estados de entrega en Moodle…';
+    get('sync-now').click();
+  });
   get('sync-now').addEventListener('click', () => {
     if (privateServer) {
       queryPrivateServer(true);
@@ -847,6 +866,7 @@ if (location.origin === 'http://127.0.0.1:8765' ||
     get('private-server-url').value = privateServer;
     get('disconnect-private-server').hidden = false;
     get('sync-now').hidden = false;
+    get('sync-tasks').hidden = false;
     restorePrivateCalendar();
     if (aiEnabled || !privateCalendar) queryPrivateServer(true);
     else if (!privatePassword) queryPrivateServer(false);
