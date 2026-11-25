@@ -13,7 +13,7 @@ El sitio de GitHub Pages es visible públicamente en la configuración habitual.
 1. En Render, crea un **Blueprint** desde este repositorio. El archivo `render.yaml` crea un servicio web con una API protegida por una clave de acceso.
 2. En el formulario de Render, introduce `MOODLE_USERNAME` y `MOODLE_PASSWORD` como variables de entorno. Render genera `AGENDA_ACCESS_KEY`. Las tres variables se configuran en Render y sus valores quedan fuera del repositorio.
 3. Abre Agenda Campus y ve a **Ajustes → Cuenta de Moodle Sevilla → Conectar servidor privado**. Pega la dirección del servicio de Render y el valor de `AGENDA_ACCESS_KEY`. Pulsa **Conectar y actualizar**.
-4. Comprueba que aparecen tus fechas y estados. A partir de ahí, puedes usar **Actualizar ahora** sin la extensión. Con la IA local activada, la agenda también comprueba Moodle al abrirla en una pestaña con la clave activa.
+4. Comprueba que aparecen tus fechas y estados. La agenda comprueba Moodle al abrirse o al volver a la pestaña si han pasado 30 minutos desde la última lectura y la clave sigue activa. **Actualizar ahora** permite iniciar una comprobación manual.
 
 El navegador conserva la clave de acceso durante la sesión de la pestaña y guarda en este dispositivo los meses ya sincronizados. Render consulta el mes actual y el siguiente bajo demanda. Cada lectura correcta actualiza esos meses y conserva el historial de meses anteriores. Al desconectar el servidor se borra la copia local. El acceso real depende de que EducaAnd admita el inicio de sesión desde Render.
 

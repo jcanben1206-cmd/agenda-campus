@@ -208,7 +208,7 @@ try {
     </fieldset>
     <section class="account-settings" aria-labelledby="account-title">
       <h2 id="account-title">Cuenta de Moodle Sevilla</h2>
-      <p class="summary">La agenda comprueba los cambios al abrir el calendario de Moodle en Chrome o al pulsar Actualizar ahora.</p>
+      <p class="summary">El servidor privado comprueba las novedades al abrir la agenda o volver a ella si han pasado 30 minutos desde la última lectura.</p>
       <a class="account-link" href="https://educacionadistancia.juntadeandalucia.es/centros/sevilla/calendar/view.php?view=month" target="_blank" rel="noopener noreferrer">Conectar con Moodle Sevilla</a>
       <button type="button" id="account-credentials" hidden>Configurar acceso automático</button>
       <button type="button" id="sync-now" hidden>Actualizar ahora</button>
@@ -228,7 +228,7 @@ try {
     </section>
     <section class="account-settings" aria-labelledby="ai-title">
       <h2 id="ai-title">IA local</h2>
-      <p class="summary">Al abrir Agenda Campus, comprueba Moodle una vez y resume las novedades con Gemini Nano en este equipo.</p>
+      <p class="summary">Gemini Nano resume las novedades de Moodle en este equipo.</p>
       <button type="button" id="local-ai-toggle">Activar IA local</button>
       <p id="local-ai-status" class="summary" role="status"></p>
     </section>
@@ -243,6 +243,8 @@ let privateServer;
 let privatePassword;
 let privateRequest;
 let privateCalendar;
+let lastAutoAttempt = 0;
+const privateFreshness = 30 * 60 * 1000;
 
 function privateServerOrigin(value) {
   try {
@@ -756,20 +758,29 @@ function savePrivateCalendar(data) {
   return true;
 }
 
-async function queryPrivateServer(refresh) {
+function checkPrivateCalendar() {
+  if (!privateServer || document.hidden || privateRequest) return;
+  const now = Date.now();
+  const lastCheck = Number(privateCalendar?.refresh?.checkedAt) || 0;
+  if (privatePassword && (now - lastCheck < privateFreshness || now - lastAutoAttempt < 2 * 60 * 1000)) return;
+  if (privatePassword) lastAutoAttempt = now;
+  queryPrivateServer(true);
+}
+
+async function queryPrivateServer(automatic = false) {
   if (!privatePassword) {
     get('account-status').textContent = (privateCalendar ? 'Se muestran los datos guardados. ' : '') +
       'Introduce la clave del servidor para actualizar Moodle.';
     if (!get('task-sync-status').hidden) get('task-sync-status').textContent = get('account-status').textContent;
     return;
   }
-  privateRequest?.abort();
+  if (privateRequest && !privateRequest.signal.aborted) return;
   const request = new AbortController();
   privateRequest = request;
   get('account-status').textContent = 'Comprobando Moodle desde el servidor privado…';
   try {
-    const response = await fetch(privateServer + (refresh ? '/api/sync' : '/api/calendar'), {
-      method: refresh ? 'POST' : 'GET',
+    const response = await fetch(privateServer + (automatic ? '/api/auto-sync' : '/api/sync'), {
+      method: 'POST',
       headers: { Authorization: 'Bearer ' + privatePassword },
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(150000)]),
       credentials: 'omit',
@@ -781,11 +792,6 @@ async function queryPrivateServer(refresh) {
       throw new Error(response.status === 401 ? 'La clave del servidor no es correcta.' :
         response.status === 502 ? 'El servidor no pudo consultar Moodle.' : 'El servidor no completó la comprobación.');
     }
-    if (!refresh && Array.isArray(data?.months) && !data.months.length && !data.refresh) {
-      get('account-status').textContent = (privateCalendar ? 'Se muestran los datos guardados. ' : '') +
-        'Pulsa Actualizar ahora para consultar Moodle.';
-      return;
-    }
     if (!savePrivateCalendar(data)) throw new Error('El servidor devolvió un calendario incompatible.');
   } catch (error) {
     if (!request.signal.aborted) {
@@ -795,6 +801,8 @@ async function queryPrivateServer(refresh) {
       get('moodle-sync').textContent = notice;
       if (!get('task-sync-status').hidden) get('task-sync-status').textContent = notice;
     }
+  } finally {
+    if (privateRequest === request) privateRequest = undefined;
   }
 }
 
@@ -806,6 +814,7 @@ get('private-server-form').addEventListener('submit', event => {
     return;
   }
   privateRequest?.abort();
+  lastAutoAttempt = 0;
   if (privateServer !== address) syncedMonths = new Map();
   privateServer = address;
   privatePassword = get('private-server-key').value.trim();
@@ -822,11 +831,13 @@ get('private-server-form').addEventListener('submit', event => {
   } catch {}
   restorePrivateCalendar();
   render();
-  queryPrivateServer(true);
+  queryPrivateServer();
 });
 
 get('disconnect-private-server').addEventListener('click', () => {
   privateRequest?.abort();
+  privateRequest = undefined;
+  lastAutoAttempt = 0;
   try { localStorage.removeItem(privateCalendarPrefix + privateServer); } catch {}
   privateServer = null;
   privatePassword = null;
@@ -853,7 +864,7 @@ if (location.origin === 'http://127.0.0.1:8765' ||
   });
   get('sync-now').addEventListener('click', () => {
     if (privateServer) {
-      queryPrivateServer(true);
+      queryPrivateServer();
       return;
     }
     get('account-status').textContent = 'Comprobando Moodle…';
@@ -868,8 +879,7 @@ if (location.origin === 'http://127.0.0.1:8765' ||
     get('sync-now').hidden = false;
     get('sync-tasks').hidden = false;
     restorePrivateCalendar();
-    if (aiEnabled || !privateCalendar) queryPrivateServer(true);
-    else if (!privatePassword) queryPrivateServer(false);
+    checkPrivateCalendar();
   } else {
     window.postMessage({ type: 'agenda-campus:request-moodle-snapshots' }, location.origin);
   }
@@ -953,6 +963,7 @@ refreshAtMidnight();
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     render();
+    checkPrivateCalendar();
     refreshAtMidnight();
   }
 });

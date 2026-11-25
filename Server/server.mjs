@@ -19,9 +19,10 @@ function payload() {
   return { ...cache, refresh: synced ? { status: 'ok', checkedAt: lastCheck } : null };
 }
 
-function sync() {
+function sync(automatic) {
   if (running) return running;
-  if (synced && Date.now() - lastCheck < 15000) return Promise.resolve(payload());
+  const freshness = automatic ? 30 * 60 * 1000 : 15000;
+  if (synced && Date.now() - lastCheck < freshness) return Promise.resolve(payload());
   running = moodle.snapshot(cache.assignments).then(next => {
     const previous = new Map(cache.months.map(month => [month.month, month]));
     const checkedAt = Date.now();
@@ -52,7 +53,9 @@ createServer(async (request, response) => {
   if (method === 'GET' && url === '/health') {
     return send(response, 200, { ok: true, revision: process.env.RENDER_GIT_COMMIT || null });
   }
-  if (!['/api/calendar', '/api/sync'].includes(url)) return send(response, 404, { error: 'Ruta desconocida.' });
+  if (!['/api/calendar', '/api/sync', '/api/auto-sync'].includes(url)) {
+    return send(response, 404, { error: 'Ruta desconocida.' });
+  }
   if (headers.origin !== AGENDA_ORIGIN) return send(response, 403, { error: 'Origen no autorizado.' });
   response.setHeader('Access-Control-Allow-Origin', AGENDA_ORIGIN);
   response.setHeader('Vary', 'Origin');
@@ -65,9 +68,9 @@ createServer(async (request, response) => {
     return send(response, 401, { error: 'La clave del servidor no es correcta.' });
   }
   if (method === 'GET' && url === '/api/calendar') return send(response, 200, payload());
-  if (method !== 'POST' || url !== '/api/sync') return send(response, 405, { error: 'Método no permitido.' });
+  if (method !== 'POST' || url === '/api/calendar') return send(response, 405, { error: 'Método no permitido.' });
   try {
-    return send(response, 200, await sync());
+    return send(response, 200, await sync(url === '/api/auto-sync'));
   } catch {
     return send(response, 502, { error: 'El servidor no pudo consultar Moodle. Se conservan los datos de la última lectura.' });
   }
