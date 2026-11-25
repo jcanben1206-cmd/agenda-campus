@@ -208,8 +208,8 @@ try {
           <summary>Próximos eventos</summary>
           <fieldset class="theme-options">
             <legend>Periodo</legend>
-            <label><input type="radio" id="events-week" name="events-period" value="week" checked> Esta semana</label>
-            <label><input type="radio" id="events-month" name="events-period" value="month"> Este mes</label>
+            <label><input type="radio" id="events-week" name="events-period" value="week" checked> Próxima semana</label>
+            <label><input type="radio" id="events-month" name="events-period" value="month"> Próximo mes</label>
           </fieldset>
           <ul id="moodle-upcoming"></ul>
         </details>
@@ -706,9 +706,12 @@ function renderCalendar(all) {
 }
 
 function upcomingEnd(today, weekly) {
-  if (!weekly) return new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  const daysUntilMonday = 7 - (today.getDay() + 6) % 7;
-  return new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysUntilMonday);
+  const year = today.getFullYear();
+  const month = today.getMonth();
+  const day = today.getDate();
+  if (weekly) return new Date(year, month, day + 8);
+  const lastDayNextMonth = new Date(year, month + 2, 0).getDate();
+  return new Date(year, month + 1, Math.min(day, lastDayNextMonth) + 1);
 }
 
 function render() {
@@ -750,7 +753,7 @@ function render() {
   const weekly = get('events-week').checked;
   const end = upcomingEnd(current, weekly);
   entries('moodle-upcoming', realEvents.filter(item => !isPast(item) && item.date < end),
-    weekly ? 'Sin próximos eventos esta semana.' : 'Sin próximos eventos este mes.');
+    'Sin próximos eventos en este periodo.');
   entries('moodle-late', realEvents.filter(isPast), 'Sin eventos vencidos.', { newestFirst: true });
   renderCalendar([...exams, ...realEvents]);
 }
