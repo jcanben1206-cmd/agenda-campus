@@ -300,6 +300,7 @@ try {
       <div class="bar"><button type="button" id="cancel">Cancelar</button><button class="primary" type="submit">Guardar</button></div>
     </form>
     <p id="storage-message" role="status" hidden></p>
+    <p class="summary" id="exam-sync-status" role="status"></p>
     <ul id="exam-list"></ul>
   </section>
   <section class="panel" id="settings" hidden>
@@ -649,6 +650,7 @@ const shortDate = new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeSt
 const monthName = new Intl.DateTimeFormat('es-ES', { month: 'long', year: 'numeric' });
 const now = new Date();
 let exams = [];
+let examRequest;
 let moodleEvents = [];
 let moodleLoaded = false;
 let syncedMonths = new Map();
@@ -662,6 +664,8 @@ function message(content) {
   get('storage-message').hidden = !content;
 }
 function loadPersonalData() {
+  examRequest?.abort();
+  examRequest = undefined;
   exams = [];
   moodleEvents = [];
   moodleLoaded = false;
@@ -671,6 +675,17 @@ function loadPersonalData() {
     if (Array.isArray(saved)) {
       exams = saved.map(item => ({ ...item, date: new Date(item.date) }))
         .filter(item => item.kind === 'exam' && typeof item.title === 'string' && Number.isFinite(+item.date));
+    }
+    if (activeAccount || rememberedAccount) {
+      const cacheKey = personalKey(key);
+      const prefix = cacheKey + ':change:';
+      if (!localStorage.getItem(cacheKey + ':migrated')) {
+        for (const exam of exams) {
+          if (!localStorage.getItem(prefix + exam.id)) localStorage.setItem(prefix + exam.id, JSON.stringify(exam));
+        }
+        localStorage.setItem(cacheKey + ':migrated', '1');
+      }
+      exams = mergeExamChanges(exams, pendingExamChanges(prefix));
     }
   } catch {
     message('No se pudieron cargar los exámenes guardados.');
@@ -688,6 +703,66 @@ function loadPersonalData() {
   }
 }
 loadPersonalData();
+
+function pendingExamChanges(prefix) {
+  return Object.keys(localStorage).filter(k => k.startsWith(prefix))
+    .map(k => JSON.parse(localStorage.getItem(k))).filter(Boolean);
+}
+
+function mergeExamChanges(saved, pending) {
+  const byId = new Map(saved.map(item => [item.id, { ...item, date: new Date(item.date) }]));
+  for (const item of pending) {
+    if (item.removed) byId.delete(item.id);
+    else byId.set(item.id, { ...item, kind: 'exam', date: new Date(item.date) });
+  }
+  return [...byId.values()];
+}
+
+async function refreshExams() {
+  const account = activeAccount;
+  const status = get('exam-sync-status');
+  if (!account) {
+    status.textContent = rememberedAccount ? 'Inicia sesión para sincronizar los exámenes pendientes.' : 'Los exámenes de invitado se guardan en este dispositivo.';
+    return;
+  }
+  if (examRequest) return;
+  const request = new AbortController();
+  examRequest = request;
+  const cacheKey = personalKey(key);
+  const prefix = cacheKey + ':change:';
+  try {
+    let remaining;
+    do {
+      const changes = pendingExamChanges(prefix).slice(0, 100);
+      if (changes.length) status.textContent = 'Guardando tus exámenes en Agenda Campus…';
+      const response = await fetch(publicMoodleServer + '/api/exams', {
+        method: 'POST', credentials: 'omit', redirect: 'error',
+        headers: { Authorization: 'Bearer ' + account.token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ changes }), signal: AbortSignal.any([request.signal, AbortSignal.timeout(30000)])
+      });
+      if (response.status === 401) {
+        if (account === activeAccount && !request.signal.aborted) endMoodleSession('Vuelve a entrar para sincronizar tus exámenes.');
+        return;
+      }
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      if (!Array.isArray(data.exams)) throw new Error();
+      if (request.signal.aborted || account !== activeAccount) return;
+      localStorage.setItem(cacheKey, JSON.stringify(data.exams));
+      for (const item of changes) {
+        if (localStorage.getItem(prefix + item.id) === JSON.stringify(item)) localStorage.removeItem(prefix + item.id);
+      }
+      remaining = pendingExamChanges(prefix);
+      exams = mergeExamChanges(data.exams, remaining);
+      render();
+    } while (remaining.length);
+    status.textContent = 'Exámenes sincronizados con tu cuenta.';
+  } catch {
+    if (!request.signal.aborted && account === activeAccount) status.textContent = 'Sin sincronizar. Los cambios guardados en este dispositivo se reintentarán al conectar.';
+  } finally {
+    if (examRequest === request) examRequest = undefined;
+  }
+}
 
 function moodleStatus(skipped = 0) {
   const count = moodleEvents.length;
@@ -758,6 +833,17 @@ function calendarDate(value, timezone) {
 
 function save(entries) {
   try {
+    if (activeAccount || rememberedAccount) {
+      const prefix = personalKey(key) + ':change:';
+      const before = new Set(exams.map(item => item.id));
+      const after = new Set(entries.map(item => item.id));
+      for (const item of entries) {
+        if (!before.has(item.id)) localStorage.setItem(prefix + item.id, JSON.stringify(item));
+      }
+      for (const id of before) {
+        if (!after.has(id)) localStorage.setItem(prefix + id, JSON.stringify({ id, removed: true }));
+      }
+    }
     localStorage.setItem(personalKey(key), JSON.stringify(entries));
   } catch {
     message('Safari no pudo guardar el cambio en este navegador.');
@@ -766,6 +852,7 @@ function save(entries) {
   exams = entries;
   message('');
   render();
+  refreshExams();
   return true;
 }
 
@@ -986,6 +1073,7 @@ for (const button of sections) {
       else entry.removeAttribute('aria-current');
     }
     if (changed && window.matchMedia('(max-width: 42rem)').matches) window.scrollTo(0, 0);
+    if (changed && ['exams', 'calendar'].includes(button.dataset.page)) refreshExams();
   });
 }
 
@@ -1249,6 +1337,7 @@ function resetCalendarView() {
   get('local-ai-status').textContent = '';
   loadPersonalData();
   render();
+  refreshExams();
 }
 
 function endMoodleSession(text, forget = false) {
@@ -1668,6 +1757,13 @@ function refreshAtMidnight() {
   }, tomorrow - now + 50);
 }
 refreshAtMidnight();
+refreshExams();
+window.addEventListener('online', refreshExams);
+window.addEventListener('focus', refreshExams);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshExams(); });
+setInterval(() => {
+  if (!document.hidden && (!get('exams').hidden || !get('calendar').hidden)) refreshExams();
+}, 30000);
 function openAccountLink() {
   if (location.hash === '#cuenta-moodle') {
     document.querySelector('nav button[data-page="settings"]').click();

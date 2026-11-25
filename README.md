@@ -8,6 +8,10 @@ Entra con tu usuario y contraseña de EducaAnd en **Entrar con Moodle**. La cuen
 
 ## Abrir desde GitHub Pages
 
+En **Exámenes**, los dispositivos conectados a la misma cuenta de EducaAnd comparten la lista privada de Agenda Campus. Las altas y bajas se envían al guardar, al recuperar la conexión y al abrir Exámenes o Calendario. Cada navegador incorpora los exámenes que ya tenía guardados para esa cuenta al conectarse por primera vez. Los exámenes de invitado se conservan en su navegador.
+
+El servidor usa la variable privada `EXAMS_DATABASE_URL` para conectar a PostgreSQL. Concede a su usuario acceso a la base dedicada de Agenda Campus y permiso para crear la tabla `agenda_exams`. Para conexiones externas, utiliza la URL con TLS del proveedor. Las credenciales de PostgreSQL se configuran solo en el servicio de Render.
+
 El flujo **Publish Agenda Campus** publica `Web/dist` mediante GitHub Actions. En el repositorio de GitHub, selecciona **Settings → Pages → Source → GitHub Actions** y ejecuta el flujo en la rama principal. Abre la URL que muestra la publicación.
 
 Para conectar Moodle en la web alojada, recarga la extensión en `chrome://extensions` y abre **Detalles → Opciones de extensión**. En **GitHub Pages**, pega la URL publicada y pulsa **Vincular web**. Autoriza el dominio en Chrome y recarga la web. La extensión entrega los datos de Moodle al navegador desde su almacenamiento local. GitHub Pages sirve la interfaz estática.

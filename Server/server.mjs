@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { MoodleLoginRequired, MoodleSession } from './moodle.mjs';
 import { isScheduledRequest, moodleBackground } from './background.mjs';
+import { syncExams, validExamChanges } from './exams.mjs';
 
 const local = process.argv.includes('--local');
 const localOrigin = 'http://127.0.0.1:8772';
@@ -106,6 +107,7 @@ async function login(request, response) {
   activeLogins++;
   try {
     await session.moodle.authenticate();
+    session.examOwner = hash('moodle-sevilla:' + entry.username.toLowerCase()).toString('hex');
     const token = randomBytes(32).toString('base64url');
     session.backgroundOwner = !local && entry.username.toLowerCase() === MOODLE_USERNAME.trim().toLowerCase();
     session.expires = Date.now() + (entry.remember ? 30 * 86400000 : sessionLifetime);
@@ -165,7 +167,7 @@ createServer(async (request, response) => {
       return send(response, 502, { error: 'No se pudo comprobar Moodle.' });
     }
   }
-  if (!['/api/calendar', '/api/sync', '/api/auto-sync', '/api/login', '/api/logout',
+  if (!['/api/calendar', '/api/sync', '/api/auto-sync', '/api/login', '/api/logout', '/api/exams',
     '/api/background/key', '/api/background/subscribe'].includes(url)) {
     return send(response, 404, { error: 'Ruta desconocida.' });
   }
@@ -188,6 +190,15 @@ createServer(async (request, response) => {
   const isOwner = !local && timingSafeEqual(supplied, digest);
   prune(Date.now());
   const account = accounts.get(accountKey);
+  if (url === '/api/exams') {
+    if (!account) return send(response, 401, { error: 'Inicia sesión en EducaAnd para sincronizar tus exámenes.' });
+    if (method !== 'POST') return send(response, 405, { error: 'Método no permitido.' });
+    try {
+      const input = await readJson(request, 131072);
+      if (!validExamChanges(input?.changes)) return send(response, 400, { error: 'Datos de examen no válidos.' });
+      return send(response, 200, { exams: await syncExams(account.examOwner, input.changes) });
+    } catch { return send(response, 503, { error: 'No se pudo sincronizar el calendario de exámenes.' }); }
+  }
   if (url === '/api/background/key' || url === '/api/background/subscribe') {
     if (!isOwner && !account?.backgroundOwner) return send(response, 401, { error: 'Usa la conexión del propietario para activar los avisos.' });
     if (url.endsWith('/key') && method === 'GET') return send(response, 200, { key: background.publicKey });
