@@ -1,0 +1,10 @@
+{
+  "name": "Agenda Campus",
+  "short_name": "Agenda Campus",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f5fb",
+  "theme_color": "#1d327e"
+}

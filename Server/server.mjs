@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { MoodleLoginRequired, MoodleSession } from './moodle.mjs';
+import { isScheduledRequest, moodleBackground } from './background.mjs';
 
 const { AGENDA_ORIGIN, AGENDA_ACCESS_KEY, MOODLE_USERNAME, MOODLE_PASSWORD } = process.env;
 if (!AGENDA_ORIGIN || !AGENDA_ACCESS_KEY || AGENDA_ACCESS_KEY.length < 24 || !MOODLE_USERNAME || !MOODLE_PASSWORD) {
@@ -10,6 +11,7 @@ if (!AGENDA_ORIGIN || !AGENDA_ACCESS_KEY || AGENDA_ACCESS_KEY.length < 24 || !MO
 const hash = value => createHash('sha256').update(value).digest();
 const digest = hash('Bearer ' + AGENDA_ACCESS_KEY);
 const owner = calendarSession(new MoodleSession(MOODLE_USERNAME, MOODLE_PASSWORD));
+const background = moodleBackground(AGENDA_ACCESS_KEY);
 const accounts = new Map();
 const loginAttempts = new Map();
 const sessionLifetime = 12 * 60 * 60 * 1000;
@@ -54,17 +56,21 @@ function countAttempt(key, limit, now) {
   return ++attempt.count <= limit;
 }
 
-async function credentials(request) {
+async function readJson(request, limit) {
   if (request.headers['content-type']?.split(';')[0] !== 'application/json') return null;
-  if (Number(request.headers['content-length']) > 4096) return null;
+  if (Number(request.headers['content-length']) > limit) return null;
   let body = '';
   request.setEncoding('utf8');
   for await (const chunk of request) {
     body += chunk;
-    if (Buffer.byteLength(body) > 4096) return null;
+    if (Buffer.byteLength(body) > limit) return null;
   }
+  try { return JSON.parse(body); } catch { return null; }
+}
+
+async function credentials(request) {
   try {
-    const { username, password } = JSON.parse(body);
+    const { username, password } = await readJson(request, 4096);
     if (typeof username !== 'string' || typeof password !== 'string' ||
         !username.trim() || username.length > 254 || !password || password.length > 512) return null;
     return { username: username.trim(), password };
@@ -117,7 +123,21 @@ createServer(async (request, response) => {
   if (method === 'GET' && url === '/health') {
     return send(response, 200, { ok: true, revision: process.env.RENDER_GIT_COMMIT || null });
   }
-  if (!['/api/calendar', '/api/sync', '/api/auto-sync', '/api/login', '/api/logout'].includes(url)) {
+  if (method === 'POST' && url === '/api/background/sync') {
+    if (!await isScheduledRequest(headers.authorization)) return send(response, 401, { error: 'Comprobación no autorizada.' });
+    try {
+      const input = await readJson(request, 65536);
+      if (!input || !(input.state === null || typeof input.state === 'string')) {
+        return send(response, 400, { error: 'Estado de comprobación inválido.' });
+      }
+      background.restore(input.state);
+      return send(response, 200, await background.check(await sync(owner, false)));
+    } catch {
+      return send(response, 502, { error: 'No se pudo comprobar Moodle.' });
+    }
+  }
+  if (!['/api/calendar', '/api/sync', '/api/auto-sync', '/api/login', '/api/logout',
+    '/api/background/key', '/api/background/subscribe'].includes(url)) {
     return send(response, 404, { error: 'Ruta desconocida.' });
   }
   if (headers.origin !== AGENDA_ORIGIN) return send(response, 403, { error: 'Origen no autorizado.' });
@@ -137,6 +157,17 @@ createServer(async (request, response) => {
   const supplied = hash(headers.authorization || '');
   const accountKey = supplied.toString('hex');
   const isOwner = timingSafeEqual(supplied, digest);
+  if (url === '/api/background/key' || url === '/api/background/subscribe') {
+    if (!isOwner) return send(response, 401, { error: 'Usa la conexión del propietario para activar los avisos.' });
+    if (url.endsWith('/key') && method === 'GET') return send(response, 200, { key: background.publicKey });
+    if (url.endsWith('/subscribe') && method === 'POST') {
+      try {
+        if (background.subscribe(await readJson(request, 4096))) return send(response, 200, { ok: true });
+      } catch {}
+      return send(response, 400, { error: 'Suscripción push no admitida.' });
+    }
+    return send(response, 405, { error: 'Método no permitido.' });
+  }
   prune(Date.now());
   const session = isOwner ? owner : accounts.get(accountKey);
   if (!session) return send(response, 401, { error: 'La sesión ha caducado o la clave no es correcta.' });

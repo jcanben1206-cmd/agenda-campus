@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" id="theme-color" content="#f3f5fb">
+<link rel="manifest" href="./manifest.webmanifest">
 <title>Agenda Campus</title>
 <script>
 try {
@@ -279,6 +280,8 @@ try {
       <button type="button" id="sync-now" hidden>Actualizar ahora</button>
       <button type="button" id="enable-notifications" hidden>Activar avisos de escritorio</button>
       <p class="summary" id="notifications-status" role="status" hidden></p>
+      <button type="button" id="closed-notices" hidden>Activar avisos con la agenda cerrada</button>
+      <p class="summary" id="closed-notices-status" role="status" hidden></p>
       <p class="summary" id="account-status" role="status">Entra con tu cuenta de Moodle para ver tus tareas y tu calendario.</p>
       <details class="date-group" id="private-owner-settings">
         <summary>Conectar servidor privado</summary>
@@ -307,6 +310,9 @@ const privateServerSetting = 'agenda-campus-private-server';
 const privateServerSecret = 'agenda-campus-private-access-key';
 const privateCalendarPrefix = 'agenda-campus-private-calendar-v1:';
 const publicMoodleServer = 'https://agenda-campus-moodle.onrender.com';
+const backgroundNoticeKey = 'agenda-campus-closed-notices';
+let closedNotices = false;
+try { closedNotices = localStorage.getItem(backgroundNoticeKey) === 'on'; } catch {}
 const accountModeKey = 'agenda-campus-account-mode';
 const accountSessionKey = 'agenda-campus-account-session';
 const rememberedAccountKey = 'agenda-campus-remembered-calendar';
@@ -376,6 +382,57 @@ function validAccount(entry) {
     typeof entry.token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(entry.token) &&
     Number.isFinite(entry.expires) && entry.expires > Date.now());
 }
+
+function updateClosedNotices() {
+  const button = get('closed-notices');
+  button.hidden = Boolean(activeAccount || privateServer !== publicMoodleServer || !privatePassword ||
+    !('serviceWorker' in navigator) || !globalThis.PushManager || !globalThis.Notification ||
+    location.origin !== 'https://jcanben1206-cmd.github.io');
+  button.textContent = closedNotices ? 'Desactivar avisos con la agenda cerrada' : 'Activar avisos con la agenda cerrada';
+}
+
+get('closed-notices').addEventListener('click', async () => {
+  const button = get('closed-notices');
+  const status = get('closed-notices-status');
+  const headers = { Authorization: 'Bearer ' + privatePassword };
+  button.disabled = true;
+  status.hidden = false;
+  try {
+    if (!closedNotices && await Notification.requestPermission() !== 'granted') {
+      throw new Error('Permite las notificaciones para recibir avisos.');
+    }
+    await navigator.serviceWorker.register('./moodle-push.js');
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (closedNotices) {
+      if (subscription) await subscription.unsubscribe();
+      localStorage.removeItem(backgroundNoticeKey);
+      closedNotices = false;
+      status.textContent = 'Avisos con la agenda cerrada desactivados.';
+      return;
+    }
+    if (!subscription) {
+      const response = await fetch(publicMoodleServer + '/api/background/key', { headers, redirect: 'error' });
+      if (!response.ok) throw new Error('No se pudo configurar el enlace con el servidor.');
+      const { key } = await response.json();
+      const bytes = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
+      subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes });
+    }
+    const saved = await fetch(publicMoodleServer + '/api/background/subscribe', {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(subscription), redirect: 'error'
+    });
+    if (!saved.ok) throw new Error('No se pudo registrar este dispositivo para los avisos.');
+    localStorage.setItem(backgroundNoticeKey, 'on');
+    closedNotices = true;
+    status.textContent = 'Avisos con la agenda cerrada activados.';
+  } catch (error) {
+    status.textContent = error.message || 'No se pudieron configurar los avisos.';
+  } finally {
+    button.disabled = false;
+    updateClosedNotices();
+  }
+});
 
 function rememberCalendar(accountId) {
   rememberedAccount = accountId;
@@ -910,7 +967,7 @@ function savePrivateCalendar(data) {
       const notice = newTasks.size === 1 ? 'Hay una tarea nueva en Moodle.' : 'Hay ' + newTasks.size + ' tareas nuevas en Moodle.';
       get('new-tasks-notice').textContent = notice;
       get('new-tasks-notice').hidden = false;
-      if (globalThis.Notification && Notification.permission === 'granted') {
+      if (!closedNotices && globalThis.Notification && Notification.permission === 'granted') {
         try { new Notification('Agenda Campus', { body: notice, tag: 'agenda-campus-moodle' }); } catch {}
       }
     }
@@ -1003,6 +1060,7 @@ function showMoodleSession() {
   get('moodle-logout').textContent = activeAccount ? 'Cerrar sesión de Moodle' : 'Ocultar calendario guardado';
   get('private-owner-settings').hidden = Boolean(activeAccount || rememberedAccount);
   get('expired-notice').hidden = Boolean(activeAccount) || !rememberedAccount;
+  updateClosedNotices();
   const username = get('moodle-username');
   if (!activeAccount && rememberedAccount && !username.value) {
     try { username.value = localStorage.getItem(rememberedUsernamePrefix + rememberedAccount) || ''; } catch {}
@@ -1160,6 +1218,7 @@ get('private-server-form').addEventListener('submit', event => {
   if (privateServer !== address) syncedMonths = new Map();
   privateServer = address;
   privatePassword = get('private-server-key').value.trim();
+  updateClosedNotices();
   get('private-server-url').value = address;
   get('private-server-key').value = '';
   get('sync-now').hidden = false;
@@ -1184,6 +1243,7 @@ get('disconnect-private-server').addEventListener('click', () => {
   try { localStorage.removeItem(personalKey(privateCalendarPrefix + privateServer)); } catch {}
   privateServer = null;
   privatePassword = null;
+  updateClosedNotices();
   privateCalendar = null;
   syncedMonths = new Map();
   try { localStorage.removeItem(privateServerSetting); sessionStorage.removeItem(privateServerSecret); } catch {}

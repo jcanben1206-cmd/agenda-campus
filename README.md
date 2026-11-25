@@ -1,5 +1,11 @@
 # Agenda Campus
 
+## Avisos con la agenda cerrada
+
+El flujo **Check Moodle in the background** consulta cada cinco minutos la cuenta del propietario configurada en Render. GitHub usa un token temporal de identidad del flujo. El historial necesario para comparar fechas y estados y las suscripciones push se guardan cifrados en un artefacto de cada ejecución. La primera lectura establece una referencia sin emitir un aviso.
+
+Para recibir avisos, usa la conexión del propietario en Agenda Campus y pulsa **Ajustes → Cuenta de Moodle Sevilla → Activar avisos con la agenda cerrada** en cada dispositivo. En iPhone, añade la web a la pantalla de inicio y ábrela desde ahí para permitir avisos. Las demás cuentas se siguen sincronizando con la agenda abierta.
+
 ## Abrir desde GitHub Pages
 
 El flujo **Publish Agenda Campus** publica `Web/dist` mediante GitHub Actions. En el repositorio de GitHub, selecciona **Settings → Pages → Source → GitHub Actions** y ejecuta el flujo en la rama principal. Abre la URL que muestra la publicación.
