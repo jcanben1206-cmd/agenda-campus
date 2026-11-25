@@ -208,6 +208,18 @@ try {
       <button type="button" id="account-credentials" hidden>Configurar acceso automático</button>
       <button type="button" id="sync-now" hidden>Actualizar ahora</button>
       <p class="summary" id="account-status" role="status">Carga la extensión de Agenda Campus en Chrome para sincronizar tu cuenta.</p>
+      <details class="date-group">
+        <summary>Conectar servidor privado</summary>
+        <form id="private-server-form">
+          <label>Dirección del servidor <input type="url" id="private-server-url" placeholder="https://agenda-campus-moodle.onrender.com" required></label>
+          <label>Clave de acceso del servidor <input type="password" id="private-server-key" autocomplete="off" required minlength="24"></label>
+          <div class="bar">
+            <button type="submit" class="primary">Conectar y actualizar</button>
+            <button type="button" id="disconnect-private-server" hidden>Desconectar servidor</button>
+          </div>
+        </form>
+        <p class="summary">Usa la clave del servidor de Agenda Campus. El usuario y la contraseña de Moodle se configuran en Render.</p>
+      </details>
     </section>
     <section class="account-settings" aria-labelledby="ai-title">
       <h2 id="ai-title">IA local</h2>
@@ -219,6 +231,28 @@ try {
 </main>
 <script>
 const get = id => document.getElementById(id);
+const privateServerSetting = 'agenda-campus-private-server';
+const privateServerSecret = 'agenda-campus-private-access-key';
+let privateServer;
+let privatePassword;
+let privateRequest;
+
+function privateServerOrigin(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || !/^[a-z0-9-]+\.onrender\.com$/.test(url.hostname) ||
+        url.username || url.password || url.port || url.pathname !== '/' || url.search || url.hash) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+try {
+  privateServer = privateServerOrigin(localStorage.getItem(privateServerSetting));
+  privatePassword = sessionStorage.getItem(privateServerSecret);
+} catch {}
+
 const aiPreference = 'agenda-campus-local-ai';
 const aiBaseline = 'agenda-campus-ai-baseline';
 const aiOptions = { expectedInputs: [{ type: 'text', languages: ['es'] }], expectedOutputs: [{ type: 'text', languages: ['es'] }] };
@@ -619,13 +653,19 @@ get('pending').addEventListener('change', render);
 
 window.addEventListener('message', event => {
   if (event.source !== window || event.origin !== location.origin) return;
+  if (privateServer) return;
   if (event.data?.type === 'agenda-campus:sync-error') {
     get('account-status').textContent = 'No se pudo iniciar la comprobación.';
     return;
   }
   if (event.data?.type !== 'agenda-campus:moodle-snapshots' || !Array.isArray(event.data.months)) return;
+  applyMoodleSnapshot(event.data);
+});
+
+function applyMoodleSnapshot(data) {
+  if (!Array.isArray(data?.months)) return false;
   const months = new Map();
-  for (const snapshot of event.data.months) {
+  for (const snapshot of data.months) {
     if (!snapshot || !/^\d{4}-(0[1-9]|1[0-2])$/.test(snapshot.month) ||
         !Number.isFinite(snapshot.updatedAt) || !Number.isFinite(+new Date(snapshot.updatedAt)) ||
         !Array.isArray(snapshot.events)) continue;
@@ -637,7 +677,7 @@ window.addEventListener('message', event => {
       if (!date) continue;
       const assignmentId = typeof item.assignmentId === 'string' && /^\d{1,18}$/.test(item.assignmentId)
         ? item.assignmentId : null;
-      const state = assignmentId ? event.data.assignments?.[assignmentId] : null;
+      const state = assignmentId ? data.assignments?.[assignmentId] : null;
       events.push({
         date, title: item.title, allDay: true, kind: 'moodle', assignmentId,
         state: ['submitted', 'draft', 'pending'].includes(state) ? state : 'unknown'
@@ -646,15 +686,16 @@ window.addEventListener('message', event => {
     months.set(snapshot.month, { updatedAt: snapshot.updatedAt, events });
   }
   syncedMonths = months;
-  get('account-credentials').hidden = false;
+  get('account-credentials').hidden = Boolean(privateServer);
   get('sync-now').hidden = false;
   const latest = [...months.values()].reduce((time, snapshot) => Math.max(time, snapshot.updatedAt), 0);
-  const checkedAt = Number(event.data.refresh?.checkedAt);
-  const lastRead = event.data.refresh?.status === 'ok' && Number.isFinite(+new Date(checkedAt))
+  const checkedAt = Number(data.refresh?.checkedAt);
+  const lastRead = data.refresh?.status === 'ok' && Number.isFinite(+new Date(checkedAt))
     ? checkedAt : latest;
   const latestLabel = lastRead ? 'Última lectura: ' + shortDate.format(new Date(lastRead)) + '. ' : '';
-  const refresh = event.data.refresh?.status;
-  let status = 'Abre el calendario mensual de Moodle o pulsa Actualizar ahora.';
+  const refresh = data.refresh?.status;
+  let status = privateServer ? 'Servidor conectado. Pulsa Actualizar ahora para consultar Moodle.'
+    : 'Abre el calendario mensual de Moodle o pulsa Actualizar ahora.';
   if (refresh === 'session') status = 'Vuelve a iniciar sesión en Moodle y abre su calendario mensual para reanudar las actualizaciones.';
   if (refresh === 'error') status = 'La última actualización falló. Pulsa Actualizar ahora para volver a intentarlo.';
   if (refresh === 'unavailable') status = 'La última conexión no terminó. Abre Moodle para comprobar si tienes que volver a iniciar sesión.';
@@ -663,21 +704,107 @@ window.addEventListener('message', event => {
   get('account-status').textContent = latestLabel + status;
   render();
   if (refresh === 'ok') summarizeMoodleChanges(months, checkedAt);
-  if (aiEnabled && !checkedOnOpen) {
+  if (!privateServer && aiEnabled && !checkedOnOpen) {
     checkedOnOpen = true;
     get('sync-now').click();
   }
+  return true;
+}
+
+async function queryPrivateServer(refresh) {
+  if (!privatePassword) {
+    get('account-status').textContent = 'Introduce la clave del servidor en Conectar servidor privado.';
+    return;
+  }
+  privateRequest?.abort();
+  const request = new AbortController();
+  privateRequest = request;
+  get('account-status').textContent = 'Comprobando Moodle desde el servidor privado…';
+  try {
+    const response = await fetch(privateServer + (refresh ? '/api/sync' : '/api/calendar'), {
+      method: refresh ? 'POST' : 'GET',
+      headers: { Authorization: 'Bearer ' + privatePassword },
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(150000)]),
+      credentials: 'omit',
+      redirect: 'error'
+    });
+    const data = await response.json();
+    if (request.signal.aborted) return;
+    if (!response.ok) {
+      throw new Error(response.status === 401 ? 'La clave del servidor no es correcta.' :
+        response.status === 502 ? 'El servidor no pudo consultar Moodle.' : 'El servidor no completó la comprobación.');
+    }
+    if (!applyMoodleSnapshot(data)) throw new Error('El servidor devolvió un calendario incompatible.');
+  } catch (error) {
+    if (!request.signal.aborted) {
+      const status = error.name === 'Error' ? error.message : 'No se pudo conectar con el servidor privado.';
+      get('account-status').textContent = status;
+      get('moodle-sync').textContent = status;
+    }
+  }
+}
+
+get('private-server-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const address = privateServerOrigin(get('private-server-url').value.trim());
+  if (!address) {
+    get('account-status').textContent = 'Introduce la dirección HTTPS base del servicio en onrender.com.';
+    return;
+  }
+  privateRequest?.abort();
+  if (privateServer !== address) syncedMonths = new Map();
+  privateServer = address;
+  privatePassword = get('private-server-key').value.trim();
+  get('private-server-url').value = address;
+  get('private-server-key').value = '';
+  get('sync-now').hidden = false;
+  get('account-credentials').hidden = true;
+  get('disconnect-private-server').hidden = false;
+  checkedOnOpen = true;
+  try {
+    localStorage.setItem(privateServerSetting, privateServer);
+    sessionStorage.setItem(privateServerSecret, privatePassword);
+  } catch {}
+  render();
+  queryPrivateServer(true);
 });
+
+get('disconnect-private-server').addEventListener('click', () => {
+  privateRequest?.abort();
+  privateServer = null;
+  privatePassword = null;
+  syncedMonths = new Map();
+  try { localStorage.removeItem(privateServerSetting); sessionStorage.removeItem(privateServerSecret); } catch {}
+  get('private-server-form').reset();
+  get('disconnect-private-server').hidden = true;
+  get('sync-now').hidden = true;
+  get('account-status').textContent = 'Servidor desconectado.';
+  get('moodle-sync').textContent = 'Conecta Moodle para consultar tus eventos.';
+  render();
+  window.postMessage({ type: 'agenda-campus:request-moodle-snapshots' }, location.origin);
+});
+
 if (location.origin === 'http://127.0.0.1:8765' ||
     (location.protocol === 'https:' && /^[a-z0-9-]+\.github\.io$/.test(location.hostname))) {
   get('sync-now').addEventListener('click', () => {
+    if (privateServer) {
+      queryPrivateServer(true);
+      return;
+    }
     get('account-status').textContent = 'Comprobando Moodle…';
     window.postMessage({ type: 'agenda-campus:sync-now' }, location.origin);
   });
   get('account-credentials').addEventListener('click', () => {
     window.postMessage({ type: 'agenda-campus:open-credentials' }, location.origin);
   });
-  window.postMessage({ type: 'agenda-campus:request-moodle-snapshots' }, location.origin);
+  if (privateServer) {
+    get('private-server-url').value = privateServer;
+    get('disconnect-private-server').hidden = false;
+    get('sync-now').hidden = false;
+    queryPrivateServer(aiEnabled);
+  } else {
+    window.postMessage({ type: 'agenda-campus:request-moodle-snapshots' }, location.origin);
+  }
 }
 
 get('moodle-file').addEventListener('change', async event => {

@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: agenda-campus-moodle
+    runtime: node
+    plan: free
+    rootDir: Server
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.16.0
+      - key: TZ
+        value: Europe/Madrid
+      - key: AGENDA_ORIGIN
+        value: https://jcanben1206-cmd.github.io
+      - key: AGENDA_ACCESS_KEY
+        generateValue: true
+      - key: MOODLE_USERNAME
+        sync: false
+      - key: MOODLE_PASSWORD
+        sync: false

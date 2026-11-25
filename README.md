@@ -6,7 +6,16 @@ El flujo **Publish Agenda Campus** publica `Web/dist` mediante GitHub Actions. E
 
 Para conectar Moodle en la web alojada, recarga la extensión en `chrome://extensions` y abre **Detalles → Opciones de extensión**. En **GitHub Pages**, pega la URL publicada y pulsa **Vincular web**. Autoriza el dominio en Chrome y recarga la web. La extensión entrega los datos de Moodle al navegador desde su almacenamiento local. GitHub Pages sirve la interfaz estática.
 
-El sitio de GitHub Pages es visible públicamente en la configuración habitual. La publicación contiene la interfaz web. Las credenciales se guardan en la extensión de Chrome. Los exámenes y calendarios importados manualmente desde la dirección anterior pertenecen a ese origen del navegador y tienes que volver a añadirlos o importarlos en la dirección nueva.
+El sitio de GitHub Pages es visible públicamente en la configuración habitual. La publicación contiene la interfaz web. Si utilizas la extensión, las credenciales se guardan en Chrome. Los exámenes y calendarios importados manualmente desde la dirección anterior pertenecen a ese origen del navegador y tienes que volver a añadirlos o importarlos en la dirección nueva.
+
+### Sincronizar desde un servidor privado
+
+1. En Render, crea un **Blueprint** desde este repositorio. El archivo `render.yaml` crea un servicio web con una API protegida por una clave de acceso.
+2. En el formulario de Render, introduce `MOODLE_USERNAME` y `MOODLE_PASSWORD` como variables de entorno. Render genera `AGENDA_ACCESS_KEY`. Las tres variables se configuran en Render y sus valores quedan fuera del repositorio.
+3. Abre Agenda Campus y ve a **Ajustes → Cuenta de Moodle Sevilla → Conectar servidor privado**. Pega la dirección del servicio de Render y el valor de `AGENDA_ACCESS_KEY`. Pulsa **Conectar y actualizar**.
+4. Comprueba que aparecen tus fechas y estados. A partir de ahí, puedes usar **Actualizar ahora** sin la extensión. Con la IA local activada, la agenda también comprueba Moodle al abrirla en una pestaña con la clave activa.
+
+El navegador conserva la clave de acceso durante la sesión de la pestaña. Render consulta el mes actual y el siguiente bajo demanda. La caché del servidor se guarda en memoria, por lo que el primer acceso después de un reinicio puede necesitar una comprobación nueva. El acceso real depende de que EducaAnd admita el inicio de sesión desde Render.
 
 ## Demo web local para Windows
 
