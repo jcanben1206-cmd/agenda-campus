@@ -349,7 +349,7 @@ async function summarizeMoodleChanges(months, checkedAt) {
   try {
     if (!globalThis.LanguageModel || await LanguageModel.availability(aiOptions) !== 'available') return;
     session = await LanguageModel.create(aiOptions);
-    const states = { submitted: 'entregada', draft: 'borrador', pending: 'sin entregar', unknown: 'sin verificar' };
+    const states = { submitted: 'entregada', draft: 'no entregado (borrador)', pending: 'no entregado', unknown: 'sin verificar' };
     const data = changes.slice(0, 12).map(([type, [title, date, state]]) =>
       [type, title.slice(0, 180), date, states[state] || '']);
     const summary = await session.prompt(
@@ -529,7 +529,7 @@ function entries(id, items, empty, { allowDelete = false, newestFirst = false } 
       });
       row.append(remove);
     } else if (item.assignmentId) {
-      const label = { submitted: 'Entregada', draft: 'Borrador', pending: 'Sin entregar', unknown: 'Sin verificar' };
+      const label = { submitted: 'Entregada', draft: 'No entregado · Borrador', pending: 'No entregado', unknown: 'Sin verificar' };
       row.append(nodes('span', label[item.state], item.state === 'submitted' ? 'status done' : 'status'));
     } else if (item.kind === 'moodle') {
       row.append(nodes('span', 'Moodle', 'status'));
