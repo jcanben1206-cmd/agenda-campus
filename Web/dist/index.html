@@ -315,6 +315,8 @@ try {
       <p class="summary">Con la agenda abierta, el servidor revisa Moodle aproximadamente cada 10 minutos.</p>
       <form id="moodle-login" method="post" action="https://agenda-campus-moodle.onrender.com/api/login" autocomplete="on">
         <p class="summary">El servidor de Agenda Campus usa tus credenciales para entrar en Moodle Sevilla y descarta la contraseña al terminar el intento de inicio de sesión.</p>
+        <button type="button" id="moodle-autofill" hidden>Usar una cuenta guardada</button>
+        <p class="summary" id="moodle-autofill-hint">Toca el campo de usuario y elige una cuenta en el gestor de contraseñas de tu dispositivo.</p>
         <label>Usuario de Moodle <input id="moodle-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" required></label>
         <label>Contraseña de Moodle <input id="moodle-password" name="password" type="password" autocomplete="current-password" maxlength="512" required></label>
         <label class="remember-option"><input type="checkbox" id="remember-session"> Mantener mi sesión en este dispositivo</label>
@@ -1381,19 +1383,64 @@ const loginStatus = get('moodle-login-status');
 const loginFormHome = loginForm.parentElement;
 const loginStatusNext = loginStatus.nextElementSibling;
 let attemptedDeviceLogin = false;
+let credentialRequest;
+let submittingSavedLogin = false;
+const autofillButton = get('moodle-autofill');
+const canChoosePassword = Boolean(globalThis.PasswordCredential && navigator.credentials?.get);
+autofillButton.hidden = !canChoosePassword;
+get('moodle-autofill-hint').hidden = canChoosePassword;
+
+function cancelCredentialRequest() {
+  credentialRequest?.abort();
+  credentialRequest = undefined;
+}
+
+async function fillMoodleCredentials(silent) {
+  cancelCredentialRequest();
+  const request = new AbortController();
+  credentialRequest = request;
+  try {
+    const credential = await navigator.credentials.get({
+      password: true, mediation: silent ? 'silent' : 'required', signal: request.signal
+    });
+    if (request.signal.aborted || activeAccount) return false;
+    if (credential?.type === 'password' && credential.id && credential.password) {
+      if (silent && (localStorage.getItem(deviceLoginKey) !== rememberedAccount ||
+          localStorage.getItem(rememberedUsernamePrefix + rememberedAccount) !== credential.id)) return false;
+      get('moodle-username').value = credential.id;
+      get('moodle-password').value = credential.password;
+      return true;
+    }
+  } catch {
+    if (request.signal.aborted) return false;
+  } finally {
+    if (credentialRequest === request) credentialRequest = undefined;
+  }
+  if (!silent) {
+    loginMessage('No se ha seleccionado ninguna cuenta. Puedes usar la sugerencia del navegador o escribir tus datos.');
+    get('moodle-username').focus();
+  }
+  return false;
+}
+
+autofillButton.addEventListener('click', async () => {
+  if (await fillMoodleCredentials(false)) {
+    loginMessage('Cuenta completada. Pulsa «Entrar con Moodle» para continuar.');
+    loginForm.querySelector('button[type="submit"]').focus();
+  }
+});
+loginForm.addEventListener('input', cancelCredentialRequest);
+
 async function resumeDeviceLogin() {
-  if (attemptedDeviceLogin || activeAccount || !rememberedAccount || !globalThis.PasswordCredential) return;
+  if (attemptedDeviceLogin || activeAccount || !rememberedAccount || !canChoosePassword || credentialRequest) return;
   try {
     if (localStorage.getItem(deviceLoginKey) !== rememberedAccount) return;
     attemptedDeviceLogin = true;
-    const credential = await navigator.credentials.get({ password: true, mediation: 'silent' });
-    if (!credential || activeAccount || localStorage.getItem(deviceLoginKey) !== rememberedAccount ||
-        localStorage.getItem(rememberedUsernamePrefix + rememberedAccount) !== credential.id) return;
-    get('moodle-username').value = credential.id;
-    get('moodle-password').value = credential.password;
+    if (!await fillMoodleCredentials(true)) return;
     get('remember-session').checked = true;
+    submittingSavedLogin = true;
     loginForm.requestSubmit(loginForm.querySelector('button[type="submit"]'));
-  } catch {}
+  } catch {} finally { submittingSavedLogin = false; }
 }
 get('resume-moodle').addEventListener('click', () => {
   get('resume-fields').append(loginForm, loginStatus);
@@ -1403,6 +1450,7 @@ get('resume-moodle').addEventListener('click', () => {
 });
 get('close-resume').addEventListener('click', () => resumeDialog.close());
 resumeDialog.addEventListener('close', () => {
+  cancelCredentialRequest();
   loginFormHome.insertBefore(loginForm, get('moodle-logout'));
   loginFormHome.insertBefore(loginStatus, loginStatusNext);
   get('moodle-password').value = '';
@@ -1410,12 +1458,15 @@ resumeDialog.addEventListener('close', () => {
 
 get('moodle-login').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = event.submitter;
+  const button = loginForm.querySelector('button[type="submit"]');
   if (button.disabled) return;
+  cancelCredentialRequest();
+  const offerToSave = !submittingSavedLogin && globalThis.PasswordCredential && navigator.credentials?.store;
   const username = get('moodle-username').value.trim();
   const password = get('moodle-password').value;
   const remember = get('remember-session').checked;
   button.disabled = true;
+  autofillButton.disabled = true;
   loginMessage('Conectando con Moodle Sevilla…');
   try {
     const response = await fetch(publicMoodleServer + '/api/login', {
@@ -1458,8 +1509,10 @@ get('moodle-login').addEventListener('submit', async event => {
     restorePrivateCalendar();
     if (calendar) savePrivateCalendar(calendar);
     loginMessage(entry.backgroundOwner ? 'Sesión iniciada. La cuenta se actualiza también con el dispositivo apagado.' : 'Sesión de Moodle iniciada.');
-    if (remember && globalThis.PasswordCredential && !attemptedDeviceLogin) {
-      navigator.credentials.store(new PasswordCredential({ id: username, password })).catch(() => {});
+    if (offerToSave) {
+      try {
+        navigator.credentials.store(new PasswordCredential({ id: username, password })).catch(() => {});
+      } catch {}
     }
     get('sync-now').hidden = false;
     get('sync-tasks').hidden = false;
@@ -1471,6 +1524,7 @@ get('moodle-login').addEventListener('submit', async event => {
   } finally {
     get('moodle-password').value = '';
     button.disabled = false;
+    autofillButton.disabled = false;
   }
 });
 
