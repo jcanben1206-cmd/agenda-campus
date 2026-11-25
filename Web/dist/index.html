@@ -143,6 +143,7 @@ try {
   .theme-options label { display: flex; align-items: center; min-height: 44px; gap: var(--space-xs); padding: var(--space-xs) .75rem; background: var(--soft); border-radius: var(--control-radius); cursor: pointer; }
   .theme-options label:has(input:checked) { background: var(--control); color: var(--control-text); }
   .account-settings { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+  label.remember-option { display: flex; align-items: center; gap: .5rem; min-height: 44px; cursor: pointer; }
   .account-link { display: inline-flex; align-items: center; min-height: 44px; padding: var(--space-xs) .75rem; border-radius: var(--control-radius); font-weight: 650; }
   .session-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; padding: .75rem; border-radius: .75rem; background: var(--control); }
   .session-notice p { margin: 0; }
@@ -308,16 +309,17 @@ try {
       <label><input type="radio" name="theme" id="theme-light" value="light" checked> Claro</label>
       <label><input type="radio" name="theme" id="theme-dark" value="dark"> Oscuro</label>
     </fieldset>
-    <section class="account-settings" aria-labelledby="account-title">
+    <section class="account-settings" id="cuenta-moodle" aria-labelledby="account-title">
       <h2 id="account-title">Cuenta de Moodle Sevilla</h2>
       <p class="summary">Con la agenda abierta, el servidor revisa Moodle aproximadamente cada 10 minutos.</p>
       <form id="moodle-login" method="post" action="https://agenda-campus-moodle.onrender.com/api/login" autocomplete="on">
         <p class="summary">El servidor de Agenda Campus usa tus credenciales para entrar en Moodle Sevilla y descarta la contraseña al terminar el intento de inicio de sesión.</p>
         <label>Usuario de Moodle <input id="moodle-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" required></label>
         <label>Contraseña de Moodle <input id="moodle-password" name="password" type="password" autocomplete="current-password" maxlength="512" required></label>
-        <label><input type="checkbox" id="remember-session"> Mantener mi sesión en este dispositivo</label>
+        <label class="remember-option"><input type="checkbox" id="remember-session"> Mantener mi sesión en este dispositivo</label>
         <button type="submit" class="primary">Entrar con Moodle</button>
       </form>
+      <label class="remember-option" id="active-remember-label" hidden><input type="checkbox" id="active-remember"> Mantener mi sesión en este dispositivo</label>
       <button type="button" id="moodle-logout" hidden>Cerrar sesión de Moodle</button>
       <p class="summary" id="moodle-login-status" role="status" hidden></p>
       <a class="account-link" href="https://educacionadistancia.juntadeandalucia.es/centros/sevilla/calendar/view.php?view=month" target="_blank" rel="noopener noreferrer">Conectar con Moodle Sevilla</a>
@@ -1192,6 +1194,11 @@ function loginMessage(text) {
 
 function showMoodleSession() {
   get('moodle-login').hidden = Boolean(activeAccount);
+  get('active-remember-label').hidden = !activeAccount;
+  try {
+    const saved = JSON.parse(localStorage.getItem(accountSessionKey) || 'null');
+    get('active-remember').checked = Boolean(activeAccount && saved?.token === activeAccount.token);
+  } catch { get('active-remember').checked = false; }
   get('open-moodle-login').hidden = Boolean(activeAccount);
   get('moodle-logout').hidden = !activeAccount && !rememberedAccount;
   get('moodle-logout').textContent = activeAccount ? 'Cerrar sesión de Moodle' : 'Ocultar calendario guardado';
@@ -1204,6 +1211,28 @@ function showMoodleSession() {
   }
 }
 showMoodleSession();
+
+get('active-remember').addEventListener('change', event => {
+  if (!activeAccount) return;
+  const remember = event.target.checked;
+  try {
+    if (remember) {
+      localStorage.setItem(accountSessionKey, JSON.stringify(activeAccount));
+      localStorage.setItem(deviceLoginKey, activeAccount.accountId);
+      sessionStorage.removeItem(accountSessionKey);
+    } else {
+      sessionStorage.setItem(accountSessionKey, JSON.stringify(activeAccount));
+      const saved = JSON.parse(localStorage.getItem(accountSessionKey) || 'null');
+      if (saved?.token === activeAccount.token) localStorage.removeItem(accountSessionKey);
+      if (localStorage.getItem(deviceLoginKey) === activeAccount.accountId) localStorage.removeItem(deviceLoginKey);
+    }
+    const until = new Date(activeAccount.expires).toLocaleString('es-ES', {dateStyle: 'short', timeStyle: 'short'});
+    loginMessage(remember ? 'Acceso guardado en este dispositivo. Esta sesión caduca el ' + until + '.' : 'El acceso se conserva solo en esta pestaña.');
+  } catch {
+    showMoodleSession();
+    loginMessage('El navegador no ha podido cambiar cómo se guarda la sesión.');
+  }
+});
 
 function resetCalendarView() {
   closeRestRead();
@@ -1639,6 +1668,14 @@ function refreshAtMidnight() {
   }, tomorrow - now + 50);
 }
 refreshAtMidnight();
+function openAccountLink() {
+  if (location.hash === '#cuenta-moodle') {
+    document.querySelector('nav button[data-page="settings"]').click();
+    get('cuenta-moodle').scrollIntoView({ block: 'start' });
+  }
+}
+openAccountLink();
+window.addEventListener('hashchange', openAccountLink);
 resumeDeviceLogin();
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
