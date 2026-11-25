@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Agenda Campus · Moodle Sevilla",
+  "version": "0.8.0",
+  "description": "Copia las fechas del calendario mensual de Moodle Sevilla a la agenda local.",
+  "permissions": ["storage", "alarms", "scripting"],
+  "optional_host_permissions": ["https://*.github.io/*"],
+  "background": { "service_worker": "background.js" },
+  "options_page": "credentials.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://educacionadistancia.juntadeandalucia.es/centros/sevilla/",
+        "https://educacionadistancia.juntadeandalucia.es/centros/sevilla/index.php*",
+        "https://educacionadistancia.juntadeandalucia.es/centros/sevilla/my/*",
+        "https://educacionadistancia.juntadeandalucia.es/centros/sevilla/login/index.php*",
+        "https://edea.juntadeandalucia.es/cas/login*"
+      ],
+      "js": ["reconnect.js"]
+    },
+    {
+      "matches": ["https://educacionadistancia.juntadeandalucia.es/centros/sevilla/calendar/view.php*"],
+      "js": ["moodle-calendar.js"]
+    },
+    {
+      "matches": ["http://127.0.0.1/*"],
+      "js": ["agenda-origin.js", "agenda-bridge.js"]
+    }
+  ]
+}
