@@ -206,6 +206,11 @@ try {
       <div id="moodle-groups" hidden>
         <details class="date-group" open>
           <summary>Próximos eventos</summary>
+          <fieldset class="theme-options">
+            <legend>Periodo</legend>
+            <label><input type="radio" id="events-week" name="events-period" value="week" checked> Esta semana</label>
+            <label><input type="radio" id="events-month" name="events-period" value="month"> Este mes</label>
+          </fieldset>
           <ul id="moodle-upcoming"></ul>
         </details>
         <details class="date-group">
@@ -700,6 +705,12 @@ function renderCalendar(all) {
   entries('day-list', eventDays.get(dateKey(selected)) || [], 'Sin actividades para este día.');
 }
 
+function upcomingEnd(today, weekly) {
+  if (!weekly) return new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  const daysUntilMonday = 7 - (today.getDay() + 6) % 7;
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysUntilMonday);
+}
+
 function render() {
   const current = new Date();
   const today = dateKey(current);
@@ -736,7 +747,10 @@ function render() {
     ? realEvents.length + (realEvents.length === 1 ? ' evento de Moodle' : ' eventos de Moodle')
     : 'Tus entregas y exámenes en un solo lugar.';
   get('moodle-groups').hidden = !received;
-  entries('moodle-upcoming', realEvents.filter(item => !isPast(item)), 'Sin próximos eventos.');
+  const weekly = get('events-week').checked;
+  const end = upcomingEnd(current, weekly);
+  entries('moodle-upcoming', realEvents.filter(item => !isPast(item) && item.date < end),
+    weekly ? 'Sin próximos eventos esta semana.' : 'Sin próximos eventos este mes.');
   entries('moodle-late', realEvents.filter(isPast), 'Sin eventos vencidos.', { newestFirst: true });
   renderCalendar([...exams, ...realEvents]);
 }
@@ -763,6 +777,8 @@ function changeMonth(step) {
 get('previous').addEventListener('click', () => changeMonth(-1));
 get('next').addEventListener('click', () => changeMonth(1));
 get('pending').addEventListener('change', render);
+get('events-week').addEventListener('change', render);
+get('events-month').addEventListener('change', render);
 
 window.addEventListener('message', event => {
   if (event.source !== window || event.origin !== location.origin) return;
