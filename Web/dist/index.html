@@ -266,10 +266,10 @@ try {
     <section class="account-settings" aria-labelledby="account-title">
       <h2 id="account-title">Cuenta de Moodle Sevilla</h2>
       <p class="summary">Con la agenda abierta, el servidor revisa Moodle aproximadamente cada 10 minutos.</p>
-      <form id="moodle-login">
+      <form id="moodle-login" method="post" action="https://agenda-campus-moodle.onrender.com/api/login" autocomplete="on">
         <p class="summary">El servidor de Agenda Campus usa tus credenciales para entrar en Moodle Sevilla y descarta la contraseña al terminar el intento de inicio de sesión.</p>
-        <label>Usuario de Moodle <input id="moodle-username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" required></label>
-        <label>Contraseña de Moodle <input id="moodle-password" type="password" autocomplete="current-password" maxlength="512" required></label>
+        <label>Usuario de Moodle <input id="moodle-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" required></label>
+        <label>Contraseña de Moodle <input id="moodle-password" name="password" type="password" autocomplete="current-password" maxlength="512" required></label>
         <button type="submit" class="primary">Entrar con Moodle</button>
       </form>
       <button type="button" id="moodle-logout" hidden>Cerrar sesión de Moodle</button>
@@ -310,6 +310,7 @@ const publicMoodleServer = 'https://agenda-campus-moodle.onrender.com';
 const accountModeKey = 'agenda-campus-account-mode';
 const accountSessionKey = 'agenda-campus-account-session';
 const rememberedAccountKey = 'agenda-campus-remembered-calendar';
+const rememberedUsernamePrefix = 'agenda-campus-moodle-username:';
 let accountMode;
 let activeAccount;
 let rememberedAccount;
@@ -1002,6 +1003,10 @@ function showMoodleSession() {
   get('moodle-logout').textContent = activeAccount ? 'Cerrar sesión de Moodle' : 'Ocultar calendario guardado';
   get('private-owner-settings').hidden = Boolean(activeAccount || rememberedAccount);
   get('expired-notice').hidden = Boolean(activeAccount) || !rememberedAccount;
+  const username = get('moodle-username');
+  if (!activeAccount && rememberedAccount && !username.value) {
+    try { username.value = localStorage.getItem(rememberedUsernamePrefix + rememberedAccount) || ''; } catch {}
+  }
 }
 showMoodleSession();
 
@@ -1025,11 +1030,15 @@ function endMoodleSession(text, forget = false) {
   try {
     sessionStorage.removeItem(accountSessionKey);
     if (forget) {
+      if (rememberedAccount) localStorage.removeItem(rememberedUsernamePrefix + rememberedAccount);
       if (localStorage.getItem(rememberedAccountKey) === rememberedAccount) localStorage.removeItem(rememberedAccountKey);
     }
   } catch {}
   activeAccount = null;
-  if (forget) rememberedAccount = null;
+  if (forget) {
+    rememberedAccount = null;
+    get('moodle-login').reset();
+  }
   privateServer = rememberedAccount ? publicMoodleServer : null;
   privatePassword = null;
   resetCalendarView();
@@ -1071,7 +1080,6 @@ get('moodle-login').addEventListener('submit', async event => {
   if (button.disabled) return;
   const username = get('moodle-username').value.trim();
   const password = get('moodle-password').value;
-  get('moodle-password').value = '';
   button.disabled = true;
   loginMessage('Conectando con Moodle Sevilla…');
   try {
@@ -1100,6 +1108,7 @@ get('moodle-login').addEventListener('submit', async event => {
     privatePassword = token;
     try {
       localStorage.setItem(accountModeKey, accountMode);
+      localStorage.setItem(rememberedUsernamePrefix + accountId, username);
       sessionStorage.setItem(accountModeKey, accountMode);
       sessionStorage.setItem(accountSessionKey, JSON.stringify(entry));
       sessionStorage.removeItem(privateServerSecret);
@@ -1118,6 +1127,7 @@ get('moodle-login').addEventListener('submit', async event => {
   } catch (error) {
     loginMessage(error.name === 'Error' ? error.message : 'No se pudo conectar con el servidor de Moodle.');
   } finally {
+    get('moodle-password').value = '';
     button.disabled = false;
   }
 });
