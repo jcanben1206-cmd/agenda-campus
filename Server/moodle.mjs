@@ -158,6 +158,7 @@ function readSubmission($) {
   const value = normalize((row.length ? row.children().last() : table.find('.submissionstatus').first()).text());
   if (/^(entregad[oa]( para (calificar|evaluar))?|enviad[oa] para (calificar|evaluar)|submitted for grading)$/.test(value)) return 'submitted';
   if (/^(borrador|draft)(\s|$)/.test(value)) return 'draft';
+  if (/^todav[ií]a no se han realizado env[ií]os$/.test(value)) return 'pending';
   if (/^(sin (entregar|entrega|env[ií]o)|no entregad[oa]|no enviad[oa]|a[uú]n no (hay|ha habido) (entrega|env[ií]o)s?|no (hay|ha habido) (ning[uú]n[ao] )?(entrega|env[ií]o)s?|no se ha (enviado|entregado|realizado) (nada|ninguna entrega|ning[uú]n env[ií]o|esta tarea)( (para|en) esta tarea)?|nothing (has been )?submitted for this assignment|no submission(?: yet)?)$/.test(value)) return 'pending';
   return null;
 }
