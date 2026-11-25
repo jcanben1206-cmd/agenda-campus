@@ -21,7 +21,7 @@ function payload() {
 
 function sync(automatic) {
   if (running) return running;
-  const freshness = automatic ? 30 * 60 * 1000 : 15000;
+  const freshness = automatic ? 10 * 60 * 1000 : 15000;
   if (synced && Date.now() - lastCheck < freshness) return Promise.resolve(payload());
   running = moodle.snapshot(cache.assignments).then(next => {
     const previous = new Map(cache.months.map(month => [month.month, month]));

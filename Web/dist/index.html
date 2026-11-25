@@ -114,6 +114,7 @@ try {
 <div class="hero">
   <h1>Tu agenda de clase</h1>
   <p id="overview"></p>
+  <p id="new-tasks-notice" role="status" hidden></p>
 </div>
 <nav aria-label="Secciones">
   <button type="button" data-page="tasks" aria-current="page">Tareas</button>
@@ -208,10 +209,12 @@ try {
     </fieldset>
     <section class="account-settings" aria-labelledby="account-title">
       <h2 id="account-title">Cuenta de Moodle Sevilla</h2>
-      <p class="summary">El servidor privado comprueba las novedades al abrir la agenda o volver a ella si han pasado 30 minutos desde la última lectura.</p>
+      <p class="summary">Con la agenda abierta, el servidor revisa Moodle aproximadamente cada 10 minutos.</p>
       <a class="account-link" href="https://educacionadistancia.juntadeandalucia.es/centros/sevilla/calendar/view.php?view=month" target="_blank" rel="noopener noreferrer">Conectar con Moodle Sevilla</a>
       <button type="button" id="account-credentials" hidden>Configurar acceso automático</button>
       <button type="button" id="sync-now" hidden>Actualizar ahora</button>
+      <button type="button" id="enable-notifications" hidden>Activar avisos de escritorio</button>
+      <p class="summary" id="notifications-status" role="status" hidden></p>
       <p class="summary" id="account-status" role="status">Carga la extensión de Agenda Campus en Chrome para sincronizar tu cuenta.</p>
       <details class="date-group">
         <summary>Conectar servidor privado</summary>
@@ -244,7 +247,25 @@ let privatePassword;
 let privateRequest;
 let privateCalendar;
 let lastAutoAttempt = 0;
-const privateFreshness = 30 * 60 * 1000;
+let privateCheckTimer;
+const privateFreshness = 10 * 60 * 1000;
+
+function updateNotificationControl() {
+  const button = get('enable-notifications');
+  const status = get('notifications-status');
+  button.hidden = !globalThis.Notification || Notification.permission !== 'default';
+  status.hidden = !globalThis.Notification || Notification.permission === 'default';
+  if (!status.hidden) {
+    status.textContent = Notification.permission === 'granted'
+      ? 'Avisos de escritorio activados.'
+      : 'Chrome ha bloqueado los avisos. Puedes permitirlos en los permisos de este sitio.';
+  }
+}
+updateNotificationControl();
+get('enable-notifications').addEventListener('click', async () => {
+  try { await Notification.requestPermission(); } catch {}
+  updateNotificationControl();
+});
 
 function privateServerOrigin(value) {
   try {
@@ -751,6 +772,19 @@ function savePrivateCalendar(data) {
     refresh: data.refresh
   };
   if (!applyMoodleSnapshot(snapshot)) return false;
+  if (privateCalendar) {
+    const alreadySeen = new Set(privateCalendar.months.flatMap(month => month.events.map(item => item?.assignmentId)));
+    const newTasks = new Set(data.months.flatMap(month => month.events.map(item => item?.assignmentId))
+      .filter(id => id && !alreadySeen.has(id)));
+    if (newTasks.size) {
+      const notice = newTasks.size === 1 ? 'Hay una tarea nueva en Moodle.' : 'Hay ' + newTasks.size + ' tareas nuevas en Moodle.';
+      get('new-tasks-notice').textContent = notice;
+      get('new-tasks-notice').hidden = false;
+      if (globalThis.Notification && Notification.permission === 'granted') {
+        try { new Notification('Agenda Campus', { body: notice, tag: 'agenda-campus-moodle' }); } catch {}
+      }
+    }
+  }
   if (JSON.stringify(privateCalendar) !== JSON.stringify(snapshot)) {
     try { localStorage.setItem(privateCalendarPrefix + privateServer, JSON.stringify(snapshot)); } catch {}
   }
@@ -759,11 +793,14 @@ function savePrivateCalendar(data) {
 }
 
 function checkPrivateCalendar() {
-  if (!privateServer || document.hidden || privateRequest) return;
-  const now = Date.now();
-  const lastCheck = Number(privateCalendar?.refresh?.checkedAt) || 0;
-  if (privatePassword && (now - lastCheck < privateFreshness || now - lastAutoAttempt < 2 * 60 * 1000)) return;
-  if (privatePassword) lastAutoAttempt = now;
+  clearTimeout(privateCheckTimer);
+  if (!privateServer || privateRequest) return;
+  const lastActivity = Math.max(Number(privateCalendar?.refresh?.checkedAt) || 0, lastAutoAttempt);
+  const delay = lastActivity + privateFreshness - Date.now();
+  if (privatePassword && delay > 0) {
+    privateCheckTimer = setTimeout(checkPrivateCalendar, delay);
+    return;
+  }
   queryPrivateServer(true);
 }
 
@@ -777,6 +814,7 @@ async function queryPrivateServer(automatic = false) {
   if (privateRequest && !privateRequest.signal.aborted) return;
   const request = new AbortController();
   privateRequest = request;
+  lastAutoAttempt = Date.now();
   get('account-status').textContent = 'Comprobando Moodle desde el servidor privado…';
   try {
     const response = await fetch(privateServer + (automatic ? '/api/auto-sync' : '/api/sync'), {
@@ -789,6 +827,10 @@ async function queryPrivateServer(automatic = false) {
     const data = await response.json();
     if (request.signal.aborted) return;
     if (!response.ok) {
+      if (response.status === 401) {
+        privatePassword = null;
+        try { sessionStorage.removeItem(privateServerSecret); } catch {}
+      }
       throw new Error(response.status === 401 ? 'La clave del servidor no es correcta.' :
         response.status === 502 ? 'El servidor no pudo consultar Moodle.' : 'El servidor no completó la comprobación.');
     }
@@ -802,7 +844,10 @@ async function queryPrivateServer(automatic = false) {
       if (!get('task-sync-status').hidden) get('task-sync-status').textContent = notice;
     }
   } finally {
-    if (privateRequest === request) privateRequest = undefined;
+    if (privateRequest === request) {
+      privateRequest = undefined;
+      if (privatePassword) checkPrivateCalendar();
+    }
   }
 }
 
@@ -838,6 +883,7 @@ get('disconnect-private-server').addEventListener('click', () => {
   privateRequest?.abort();
   privateRequest = undefined;
   lastAutoAttempt = 0;
+  clearTimeout(privateCheckTimer);
   try { localStorage.removeItem(privateCalendarPrefix + privateServer); } catch {}
   privateServer = null;
   privatePassword = null;
@@ -849,6 +895,7 @@ get('disconnect-private-server').addEventListener('click', () => {
   get('sync-now').hidden = true;
   get('sync-tasks').hidden = true;
   get('task-sync-status').hidden = true;
+  get('new-tasks-notice').hidden = true;
   get('account-status').textContent = 'Servidor desconectado.';
   get('moodle-sync').textContent = 'Conecta Moodle para consultar tus eventos.';
   render();
