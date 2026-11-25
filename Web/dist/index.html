@@ -297,8 +297,10 @@ const privateCalendarPrefix = 'agenda-campus-private-calendar-v1:';
 const publicMoodleServer = 'https://agenda-campus-moodle.onrender.com';
 const accountModeKey = 'agenda-campus-account-mode';
 const accountSessionKey = 'agenda-campus-account-session';
+const rememberedAccountKey = 'agenda-campus-remembered-calendar';
 let accountMode;
 let activeAccount;
+let rememberedAccount;
 let privateServer;
 let privatePassword;
 let privateRequest;
@@ -341,9 +343,16 @@ try {
   if (validAccount(saved)) {
     accountMode = 'moodle';
     activeAccount = saved;
+    rememberCalendar(saved.accountId);
     privateServer = publicMoodleServer;
     privatePassword = saved.token;
-  } else if (accountMode !== 'moodle') {
+  } else if (accountMode === 'moodle') {
+    const accountId = localStorage.getItem(rememberedAccountKey);
+    if (accountId && /^[a-f0-9]{64}$/.test(accountId)) {
+      rememberedAccount = accountId;
+      privateServer = publicMoodleServer;
+    }
+  } else {
     privateServer = privateServerOrigin(localStorage.getItem(privateServerSetting));
     privatePassword = sessionStorage.getItem(privateServerSecret);
   }
@@ -355,8 +364,14 @@ function validAccount(entry) {
     Number.isFinite(entry.expires) && entry.expires > Date.now());
 }
 
+function rememberCalendar(accountId) {
+  rememberedAccount = accountId;
+  try { localStorage.setItem(rememberedAccountKey, accountId); } catch {}
+}
+
 function personalKey(base) {
-  if (activeAccount) return base + ':' + activeAccount.accountId;
+  const accountId = activeAccount?.accountId || rememberedAccount;
+  if (accountId) return base + ':' + accountId;
   return accountMode === 'moodle' ? base + ':guest' : base;
 }
 
@@ -913,7 +928,7 @@ function checkPrivateCalendar() {
 async function queryPrivateServer(automatic = false) {
   if (!privatePassword) {
     get('account-status').textContent = (privateCalendar ? 'Se muestran los datos guardados. ' : '') +
-      'Introduce la clave del servidor para actualizar Moodle.';
+      (rememberedAccount ? 'Vuelve a entrar con Moodle para actualizar.' : 'Introduce la clave del servidor para actualizar Moodle.');
     if (!get('task-sync-status').hidden) get('task-sync-status').textContent = get('account-status').textContent;
     return;
   }
@@ -971,8 +986,9 @@ function loginMessage(text) {
 function showMoodleSession() {
   get('moodle-login').hidden = Boolean(activeAccount);
   get('open-moodle-login').hidden = Boolean(activeAccount);
-  get('moodle-logout').hidden = !activeAccount;
-  get('private-owner-settings').hidden = Boolean(activeAccount);
+  get('moodle-logout').hidden = !activeAccount && !rememberedAccount;
+  get('moodle-logout').textContent = activeAccount ? 'Cerrar sesión de Moodle' : 'Ocultar calendario guardado';
+  get('private-owner-settings').hidden = Boolean(activeAccount || rememberedAccount);
 }
 showMoodleSession();
 
@@ -992,13 +1008,16 @@ function resetCalendarView() {
   render();
 }
 
-function endMoodleSession(text) {
+function endMoodleSession(text, forget = false) {
   try {
-    localStorage.removeItem(personalKey(privateCalendarPrefix + privateServer));
     sessionStorage.removeItem(accountSessionKey);
+    if (forget) {
+      if (localStorage.getItem(rememberedAccountKey) === rememberedAccount) localStorage.removeItem(rememberedAccountKey);
+    }
   } catch {}
   activeAccount = null;
-  privateServer = null;
+  if (forget) rememberedAccount = null;
+  privateServer = rememberedAccount ? publicMoodleServer : null;
   privatePassword = null;
   resetCalendarView();
   showMoodleSession();
@@ -1007,6 +1026,7 @@ function endMoodleSession(text) {
   get('account-status').textContent = '';
   get('moodle-sync').textContent = 'Entra con tu cuenta de Moodle para sincronizar el calendario.';
   loginMessage(text);
+  if (rememberedAccount) restorePrivateCalendar();
 }
 
 get('open-moodle-login').addEventListener('click', () => {
@@ -1044,6 +1064,7 @@ get('moodle-login').addEventListener('submit', async event => {
     }
     activeAccount = entry;
     accountMode = 'moodle';
+    rememberCalendar(accountId);
     privateServer = publicMoodleServer;
     privatePassword = token;
     try {
@@ -1071,7 +1092,7 @@ get('moodle-login').addEventListener('submit', async event => {
 
 get('moodle-logout').addEventListener('click', () => {
   const token = activeAccount?.token;
-  endMoodleSession('Sesión cerrada.');
+  endMoodleSession(token ? 'Sesión cerrada.' : 'Calendario guardado oculto.', true);
   if (token) fetch(publicMoodleServer + '/api/logout', {
     method: 'POST', headers: { Authorization: 'Bearer ' + token }, credentials: 'omit', redirect: 'error', keepalive: true
   }).catch(() => {});
@@ -1155,7 +1176,7 @@ if (location.origin === 'http://127.0.0.1:8765' ||
     window.postMessage({ type: 'agenda-campus:open-credentials' }, location.origin);
   });
   if (privateServer) {
-    if (!activeAccount) {
+    if (!activeAccount && !rememberedAccount) {
       get('private-server-url').value = privateServer;
       get('disconnect-private-server').hidden = false;
     }
