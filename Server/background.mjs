@@ -20,7 +20,7 @@ export async function isScheduledRequest(authorization) {
     if (alg !== 'RS256' || typeof kid !== 'string' || iss !== issuer || aud !== audience ||
         !Number.isFinite(exp) || exp <= now || !Number.isFinite(nbf) || nbf > now + 15 ||
         repo !== repository || workflow !== repository + '/.github/workflows/moodle-check.yml@refs/heads/main' ||
-        !['schedule', 'workflow_dispatch', 'push'].includes(event)) return false;
+        !['schedule', 'workflow_dispatch'].includes(event)) return false;
     if (Date.now() >= githubKeysUntil || !githubKeys?.has(kid)) {
       const response = await fetch(issuer + '/.well-known/jwks', { signal: AbortSignal.timeout(8000), redirect: 'error' });
       if (!response.ok) return false;

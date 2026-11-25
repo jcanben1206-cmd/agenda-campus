@@ -1,11 +1,6 @@
 name: Check Moodle in the background
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'Server/**'
-      - '.github/workflows/moodle-check.yml'
   schedule:
     - cron: '2-57/5 * * * *'
   workflow_dispatch:
@@ -24,18 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Wait for the calendar API deployment
-        if: github.event_name == 'push'
-        shell: bash
-        run: |
-          for attempt in {1..25}; do
-            if curl -fsS --max-time 15 https://agenda-campus-moodle.onrender.com/health | jq -e '.calendarApi == true' >/dev/null; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "::error::Render has not deployed the calendar API."
-          exit 1
       - name: Restore encrypted state
         env:
           GH_TOKEN: ${{ github.token }}
